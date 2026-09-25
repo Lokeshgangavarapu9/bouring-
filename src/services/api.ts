@@ -93,13 +93,19 @@ export const api = {
         body: JSON.stringify({ userId }),
       }),
 
-    getGoogleConfig: () =>
-      request<{ configured: boolean; clientId: string | null }>('/auth/google/config'),
+    getSupabaseConfig: () =>
+      request<{ configured: boolean; supabaseUrl: string | null; anonKey: string | null }>('/auth/supabase-config'),
 
-    loginWithGoogle: (payload: { idToken?: string; code?: string; mockUserInfo?: any }) =>
-      request<{ user: any; token: string; isNewUser?: boolean }>('/auth/google', {
+    forgotPassword: (email: string, redirectTo?: string) =>
+      request<{ success: boolean; message: string }>('/auth/forgot-password', {
         method: 'POST',
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ email, redirectTo }),
+      }),
+
+    resetPassword: (password: string, confirmPassword?: string, accessToken?: string) =>
+      request<{ success: boolean; message: string }>('/auth/reset-password', {
+        method: 'POST',
+        body: JSON.stringify({ password, confirmPassword, accessToken }),
       }),
   },
 

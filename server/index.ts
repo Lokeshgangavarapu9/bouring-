@@ -3,6 +3,11 @@ import cors from 'cors';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+
+try {
+  process.loadEnvFile();
+} catch {}
+
 import { authRouter } from './routes/authRoutes.ts';
 import { relationshipRouter } from './routes/relationshipRoutes.ts';
 import { userRouter } from './routes/userRoutes.ts';

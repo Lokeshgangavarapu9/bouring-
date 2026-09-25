@@ -15,6 +15,8 @@ import { SettingsPage } from './pages/SettingsPage';
 import { ProtectedRoute } from './components/auth/ProtectedRoute';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 
+import { ResetPasswordPage } from './pages/ResetPasswordPage';
+
 export const App: React.FC = () => {
   return (
     <ErrorBoundary>
@@ -28,6 +30,7 @@ export const App: React.FC = () => {
                 <Route path="login" element={<AuthPage />} />
                 <Route path="signup" element={<AuthPage />} />
                 <Route path="auth" element={<AuthPage />} />
+                <Route path="reset-password" element={<ResetPasswordPage />} />
 
                 {/* Primary Authenticated Routes */}
                 <Route

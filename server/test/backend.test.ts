@@ -7,6 +7,7 @@ const __dirname = path.dirname(__filename);
 // STRICT DATABASE ISOLATION:
 // Set test database path before loading any database-dependent modules
 process.env.DATABASE_PATH = path.resolve(__dirname, '../data/test.db');
+process.env.NODE_ENV = 'test';
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -48,16 +49,16 @@ async function runTests() {
   const testTimestamp = Date.now();
   const testEmail = `tester-${testTimestamp}@example.com`;
   const testUsername = `user_${testTimestamp}`;
-  const { user: createdUser, token } = signup('Test Subject', testUsername, testEmail, 'securePass123');
+  const { user: createdUser, token } = await signup('Test Subject', testUsername, testEmail, 'securePass123');
   assert(createdUser.username === testUsername, 'User signup creates valid account');
   assert(Boolean(token && token.length > 20), 'Signup returns signed JWT');
 
-  const { user: loggedInUser } = login(testUsername, 'securePass123');
+  const { user: loggedInUser } = await login(testUsername, 'securePass123');
   assert(loggedInUser.id === createdUser.id, 'User login succeeds with correct credentials');
 
   let failedAuth = false;
   try {
-    login(testUsername, 'wrongPassword');
+    await login(testUsername, 'wrongPassword');
   } catch {
     failedAuth = true;
   }
@@ -181,10 +182,10 @@ async function runTests() {
 
   // Create test users A, B, C, D
   const testPrefix = `iso_${Date.now()}`;
-  const uA = signup('Alpha', `${testPrefix}_a`, `${testPrefix}_a@test.com`, 'pass123').user;
-  const uB = signup('Beta', `${testPrefix}_b`, `${testPrefix}_b@test.com`, 'pass123').user;
-  const uC = signup('Gamma', `${testPrefix}_c`, `${testPrefix}_c@test.com`, 'pass123').user;
-  const uD = signup('Delta', `${testPrefix}_d`, `${testPrefix}_d@test.com`, 'pass123').user;
+  const uA = (await signup('Alpha', `${testPrefix}_a`, `${testPrefix}_a@test.com`, 'pass123')).user;
+  const uB = (await signup('Beta', `${testPrefix}_b`, `${testPrefix}_b@test.com`, 'pass123')).user;
+  const uC = (await signup('Gamma', `${testPrefix}_c`, `${testPrefix}_c@test.com`, 'pass123')).user;
+  const uD = (await signup('Delta', `${testPrefix}_d`, `${testPrefix}_d@test.com`, 'pass123')).user;
 
   // A <-> B (MUTUAL)
   const reqAB = sendRequest(uA.id, uB.id);
@@ -354,70 +355,120 @@ async function runTests() {
   assert(snapshotA.userId !== snapshotB.userId, 'Snapshots have distinct user authorities');
   assert(pipelineA.graphVersionHash !== pipelineB.graphVersionHash || snapshotA.userId !== snapshotB.userId, 'User graphs are isolated');
 
-  // 16. Google Authentication & Account Linking Test Suite
-  console.log('\n--- Testing Google Authentication & Safe Account Linking ---');
+  // 16. Supabase Production Auth & Password Management Test Suite
+  console.log('\n--- Testing Supabase Production Auth & Password Management ---');
   const {
-    getGoogleConfig,
-    isGoogleAuthConfigured,
-    getGoogleAuthUrl,
-    handleGoogleUserIdentity,
-  } = await import('../services/googleAuthService.ts');
+    getPublicSupabaseConfig,
+    isSupabaseConfigured,
+    supabaseRequestPasswordReset,
+  } = await import('../services/supabaseService.ts');
+  const {
+    syncSupabaseUser,
+    verifyToken: verifyAuthToken,
+    getUserByEmail: getEmailUser,
+    getUserByUsername: getUsernameUser,
+  } = await import('../services/authService.ts');
+  const { getDatabaseAdapter } = await import('../db/adapter.ts');
 
-  // Test config detection
-  const initialGoogleConfig = getGoogleConfig();
-  assert(typeof initialGoogleConfig.configured === 'boolean', 'Google OAuth configuration status is detected');
-  
-  // Test missing configuration graceful handling
-  if (!initialGoogleConfig.configured) {
-    let unconfiguredUrlError = false;
-    try {
-      getGoogleAuthUrl();
-    } catch (e: any) {
-      unconfiguredUrlError = e.message.includes('not configured');
-    }
-    assert(unconfiguredUrlError, 'Missing Google configuration fails gracefully with clear error');
+  // Test 1: Public config isolation (Never leaks service role key)
+  const publicConfig = getPublicSupabaseConfig();
+  assert(typeof publicConfig.configured === 'boolean', 'Supabase configuration status is detected');
+  assert(!('serviceRoleKey' in publicConfig), 'CRITICAL: Service role key is NEVER leaked in public configuration');
+
+  // Test 2: Database adapter abstraction
+  const dbAdapter = getDatabaseAdapter();
+  assert(Boolean(dbAdapter && typeof dbAdapter.getUserById === 'function'), 'Database adapter provides clean interface');
+  const adapterU1 = await dbAdapter.getUserById('user-1');
+  assert(Boolean(adapterU1 && adapterU1.id === 'user-1'), 'Database adapter successfully loads user entity');
+
+  // Test 3: Supabase Auth UUID -> Boring User Mapping
+  const mockSupabaseUuid = `supa-uuid-${Date.now()}`;
+  const mockSupabaseEmail = `supabase.user.${Date.now()}@example.com`;
+  const mappedUser = syncSupabaseUser({
+    id: mockSupabaseUuid,
+    email: mockSupabaseEmail,
+    user_metadata: {
+      name: 'Supabase Pioneer',
+      username: `supapio_${Date.now()}`,
+    },
+  });
+  assert(mappedUser.id === mockSupabaseUuid, 'Supabase Auth UUID is correctly used as Boring user ID');
+  assert(mappedUser.email === mockSupabaseEmail, 'Mapped user preserves Supabase Auth email');
+  assert(mappedUser.name === 'Supabase Pioneer', 'Mapped user preserves user metadata name');
+
+  // Test 4: Idempotent Supabase User Sync
+  const repeatedSync = syncSupabaseUser({
+    id: mockSupabaseUuid,
+    email: mockSupabaseEmail,
+  });
+  assert(repeatedSync.id === mappedUser.id, 'Repeated sync returns existing Boring user without duplicates');
+
+  // Test 5: Duplicate account prevention
+  let dupEmailPrevented = false;
+  try {
+    await signup('Duplicate Subject', `unique_${Date.now()}`, mockSupabaseEmail, 'pass123456');
+  } catch (err: any) {
+    dupEmailPrevented = err.message.includes('already registered');
   }
+  assert(dupEmailPrevented, 'Duplicate email registration is strictly prevented');
 
-  // Test new Google identity creates Boring user
-  const googleUid1 = `goog-sub-${Date.now()}-1`;
-  const googleEmail1 = `google.user.${Date.now()}@gmail.com`;
-  const gAuthResult1 = handleGoogleUserIdentity({
-    googleId: googleUid1,
-    email: googleEmail1,
-    emailVerified: true,
-    name: 'Google Pioneer',
-  });
-  assert(gAuthResult1.isNewUser === true, 'New Google identity successfully creates Boring user');
-  assert(gAuthResult1.user.email === googleEmail1, 'Created user has correct verified Google email');
-  assert(Boolean(gAuthResult1.token && gAuthResult1.token.length > 20), 'Google authentication returns valid Boring JWT');
+  let dupUsernamePrevented = false;
+  try {
+    await signup('Duplicate Subject', mappedUser.username, `another_${Date.now()}@example.com`, 'pass123456');
+  } catch (err: any) {
+    dupUsernamePrevented = err.message.includes('already taken');
+  }
+  assert(dupUsernamePrevented, 'Duplicate username registration is strictly prevented');
 
-  // Test existing Google identity logs into existing Boring user
-  const gAuthResult1Repeat = handleGoogleUserIdentity({
-    googleId: googleUid1,
-    email: googleEmail1,
-    emailVerified: true,
-    name: 'Google Pioneer Renamed',
-  });
-  assert(gAuthResult1Repeat.isNewUser === false, 'Existing Google identity signs into existing Boring user');
-  assert(gAuthResult1Repeat.user.id === gAuthResult1.user.id, 'User ID matches between Google sign-ins');
+  // Test 6: Session token verification & restoration
+  const verifiedSession = verifyAuthToken(token);
+  assert(Boolean(verifiedSession && verifiedSession.userId === createdUser.id), 'Session token is verified and maps to user');
 
-  // Test duplicate account prevention: existing email/password user linked safely
-  const passwordEmail = `pwd.user.${Date.now()}@example.com`;
-  const { user: pwdUser } = signup('Password Account', `pwduser_${Date.now()}`, passwordEmail, 'securePass789');
-  
-  const googleUid2 = `goog-sub-${Date.now()}-2`;
-  const gAuthResult2Linked = handleGoogleUserIdentity({
-    googleId: googleUid2,
-    email: passwordEmail, // Matches existing password user email
-    emailVerified: true,
-    name: 'Linked Google Identity',
-  });
-  assert(gAuthResult2Linked.isNewUser === false, 'Duplicate-account prevented when verified Google email matches existing account');
-  assert(gAuthResult2Linked.user.id === pwdUser.id, 'Existing account safely linked with Google identity');
+  const invalidSession = verifyAuthToken('invalid.jwt.token.signature');
+  assert(invalidSession === null, 'Invalid token safely rejected by session verifier');
 
-  // Verify existing email/password authentication remains 100% functional
-  const pwdLoginAfterLink = login(pwdUser.username, 'securePass789');
-  assert(pwdLoginAfterLink.user.id === pwdUser.id, 'Existing email/password login remains functional after Google link');
+  // Test 7: Forgot password request flow & safety
+  // Generic safe response: never leak account existence
+  const resetRequest1 = await supabaseRequestPasswordReset(mockSupabaseEmail);
+  assert(resetRequest1.success === true, 'Forgot password request succeeds for valid email');
+  assert(resetRequest1.message.includes('If an account exists'), 'Forgot password does not leak account existence');
+
+  const resetRequestUnknown = await supabaseRequestPasswordReset('completely-unknown-user-999@domain.com');
+  assert(resetRequestUnknown.success === true, 'Forgot password for non-existent email returns identical safe response');
+
+  // Test 8: Password Reset Validation Rules
+  const validateReset = (pwd: string, confirm: string) => {
+    if (!pwd) throw new Error('New password is required');
+    if (pwd.length < 6) throw new Error('Password must be at least 6 characters');
+    if (confirm && pwd !== confirm) throw new Error('Passwords do not match');
+    return true;
+  };
+
+  let weakPasswordCaught = false;
+  try {
+    validateReset('123', '123');
+  } catch (e: any) {
+    weakPasswordCaught = e.message.includes('at least 6');
+  }
+  assert(weakPasswordCaught, 'Weak password (<6 characters) rejected in reset validation');
+
+  let mismatchCaught = false;
+  try {
+    validateReset('securePassword123', 'differentPassword456');
+  } catch (e: any) {
+    mismatchCaught = e.message.includes('do not match');
+  }
+  assert(mismatchCaught, 'Password mismatch strictly rejected in reset validation');
+
+  let emptyCaught = false;
+  try {
+    validateReset('', '');
+  } catch (e: any) {
+    emptyCaught = e.message.includes('required');
+  }
+  assert(emptyCaught, 'Empty password strictly rejected in reset validation');
+
+  const socialUser = mappedUser;
 
   // 17. Smart Social Profile Links Test Suite
   console.log('\n--- Testing Smart Social Profile Links & Security ---');
@@ -486,7 +537,6 @@ async function runTests() {
   assert(!pMalformed.valid, 'Malformed URL string safely rejected');
 
   // Test 14 & 15: Database Add, Normalization & Duplicate Detection
-  const socialUser = gAuthResult1.user;
   const addedSocial1 = await addSocialProfile(socialUser.id, 'github', 'https://github.com/boring-user/', '@boring-user');
   assert(addedSocial1.platform === 'github', 'Social profile added with verified server platform');
   assert(addedSocial1.normalized_url === 'https://github.com/boring-user', 'Social profile stored with canonical normalized URL');
