@@ -1,6 +1,7 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { db } from '../db/database.ts';
+import { getDatabaseAdapter } from '../db/adapter.ts';
 import {
   isSupabaseConfigured,
   getSupabaseAdminClient,
@@ -8,6 +9,13 @@ import {
   supabaseSignIn,
   verifySupabaseToken,
 } from './supabaseService.ts';
+
+const userCache = new Map<string, SanitizedUser>();
+
+export function clearUserCache(): void {
+  userCache.clear();
+}
+
 
 const JWT_SECRET = process.env.JWT_SECRET || 'boring-secret-key-2026-antigravity';
 
@@ -70,28 +78,100 @@ export function sanitizeUser(row: UserRow): SanitizedUser {
 }
 
 export function getUserById(id: string): SanitizedUser | null {
-  const stmt = db.prepare('SELECT * FROM users WHERE id = ?');
-  const row = stmt.get(id) as UserRow | undefined;
-  return row ? sanitizeUser(row) : null;
+  if (userCache.has(id)) {
+    return userCache.get(id)!;
+  }
+  const isProduction = Boolean(process.env.VERCEL || process.env.NODE_ENV === 'production');
+  if (isProduction) {
+    return null;
+  }
+  try {
+    const stmt = db.prepare('SELECT * FROM users WHERE id = ?');
+    const row = stmt.get(id) as UserRow | undefined;
+    if (row) {
+      const sanitized = sanitizeUser(row);
+      userCache.set(id, sanitized);
+      return sanitized;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export async function getUserByIdAsync(id: string): Promise<SanitizedUser | null> {
+  if (userCache.has(id)) {
+    return userCache.get(id)!;
+  }
+  const isProduction = Boolean(process.env.VERCEL || process.env.NODE_ENV === 'production');
+  const supabaseMode = isSupabaseConfigured() && process.env.NODE_ENV !== 'test';
+
+  if (isProduction || supabaseMode) {
+    try {
+      const adapter = getDatabaseAdapter();
+      const entity = await adapter.getUserById(id);
+      if (entity) {
+        const sanitized = sanitizeUser(entity as unknown as UserRow);
+        userCache.set(id, sanitized);
+        return sanitized;
+      }
+      return null;
+    } catch (err) {
+      if (isProduction) throw err;
+      return null;
+    }
+  }
+
+  return getUserById(id);
 }
 
 export function getUserByEmail(email: string): UserRow | null {
-  const stmt = db.prepare('SELECT * FROM users WHERE LOWER(email) = LOWER(?)');
-  const row = stmt.get(email) as UserRow | undefined;
-  return row || null;
+  try {
+    const stmt = db.prepare('SELECT * FROM users WHERE LOWER(email) = LOWER(?)');
+    const row = stmt.get(email) as UserRow | undefined;
+    return row || null;
+  } catch {
+    return null;
+  }
 }
 
 export function getUserByUsername(username: string): UserRow | null {
-  const stmt = db.prepare('SELECT * FROM users WHERE LOWER(username) = LOWER(?)');
-  const row = stmt.get(username) as UserRow | undefined;
-  return row || null;
+  try {
+    const stmt = db.prepare('SELECT * FROM users WHERE LOWER(username) = LOWER(?)');
+    const row = stmt.get(username) as UserRow | undefined;
+    return row || null;
+  } catch {
+    return null;
+  }
 }
 
 export function getAllUsers(): SanitizedUser[] {
-  const stmt = db.prepare('SELECT * FROM users ORDER BY created_at ASC');
-  const rows = stmt.all() as unknown as UserRow[];
-  return rows.map(sanitizeUser);
+  try {
+    const stmt = db.prepare('SELECT * FROM users ORDER BY created_at ASC');
+    const rows = stmt.all() as unknown as UserRow[];
+    return rows.map(sanitizeUser);
+  } catch {
+    return [];
+  }
 }
+
+export async function getAllUsersAsync(): Promise<SanitizedUser[]> {
+  const isProduction = Boolean(process.env.VERCEL || process.env.NODE_ENV === 'production');
+  const supabaseMode = isSupabaseConfigured() && process.env.NODE_ENV !== 'test';
+
+  if (isProduction || supabaseMode) {
+    const adapter = getDatabaseAdapter();
+    const entities = await adapter.getAllUsers();
+    return entities.map((u) => {
+      const sanitized = sanitizeUser(u as unknown as UserRow);
+      userCache.set(u.id, sanitized);
+      return sanitized;
+    });
+  }
+
+  return getAllUsers();
+}
+
 
 export function generateToken(userId: string): string {
   return jwt.sign({ userId }, JWT_SECRET, { expiresIn: '7d' });
@@ -259,7 +339,9 @@ export async function syncSupabaseUserAsync(
         updated_at: now,
       });
 
-      return sanitizeUser(newUser);
+      const sanitized = sanitizeUser(newUser);
+      userCache.set(authUser.id, sanitized);
+      return sanitized;
     }
   }
 
@@ -277,11 +359,22 @@ export async function signup(
   if (!cleanUsername) throw new Error('Valid username is required');
   if (!email.trim() || !email.includes('@')) throw new Error('Valid email is required');
 
-  if (getUserByEmail(email)) throw new Error('Email already registered');
-  if (getUserByUsername(cleanUsername)) throw new Error('Username already taken');
+  const isProduction = Boolean(process.env.VERCEL || process.env.NODE_ENV === 'production');
+  const supabaseMode = isSupabaseConfigured() && process.env.NODE_ENV !== 'test';
 
-  // Supabase Auth Integration (Production Mode)
-  if (isSupabaseConfigured() && process.env.NODE_ENV !== 'test') {
+  // Production fail-safe: never attempt SQLite if Supabase configuration is missing in production
+  if (isProduction && !supabaseMode) {
+    throw new Error('Production database is not configured');
+  }
+
+  // Supabase Auth + PostgreSQL Production Mode
+  if (supabaseMode) {
+    const adapter = getDatabaseAdapter();
+    const existingEmail = await adapter.getUserByEmail(email.trim());
+    if (existingEmail) throw new Error('Email already registered');
+    const existingUsername = await adapter.getUserByUsername(cleanUsername);
+    if (existingUsername) throw new Error('Username already taken');
+
     const { authUser, session } = await supabaseSignUp(name.trim(), cleanUsername, email.trim(), password || 'password123');
     const user = await syncSupabaseUserAsync(authUser, name.trim(), cleanUsername);
     const token = session?.access_token || generateToken(user.id);
@@ -289,6 +382,9 @@ export async function signup(
   }
 
   // Local SQLite Development Mode
+  if (getUserByEmail(email)) throw new Error('Email already registered');
+  if (getUserByUsername(cleanUsername)) throw new Error('Username already taken');
+
   const passwordHash = bcrypt.hashSync(password || 'password123', 10);
   const now = new Date().toISOString();
   const id = `user-${Date.now()}`;
@@ -340,17 +436,40 @@ export async function login(
   emailOrUsername: string,
   password?: string
 ): Promise<{ user: SanitizedUser; token: string }> {
-  // If Supabase is configured and input is an email, use Supabase Auth
-  if (isSupabaseConfigured() && process.env.NODE_ENV !== 'test' && emailOrUsername.includes('@')) {
-    const { authUser, token } = await supabaseSignIn(emailOrUsername.trim(), password || '');
+  const identifier = emailOrUsername.trim();
+  if (!identifier) {
+    throw new Error('Email or username is required');
+  }
+
+  const isProduction = Boolean(process.env.VERCEL || process.env.NODE_ENV === 'production');
+  const supabaseMode = isSupabaseConfigured() && process.env.NODE_ENV !== 'test';
+
+  // Production fail-safe: never attempt SQLite if Supabase configuration is missing in production
+  if (isProduction && !supabaseMode) {
+    throw new Error('Production database is not configured');
+  }
+
+  // Supabase Auth Integration (Production Mode)
+  if (supabaseMode) {
+    let email = identifier;
+    if (!email.includes('@')) {
+      const adapter = getDatabaseAdapter();
+      const userByUname = await adapter.getUserByUsername(identifier);
+      if (!userByUname || !userByUname.email) {
+        throw new Error('Invalid credentials');
+      }
+      email = userByUname.email;
+    }
+
+    const { authUser, token } = await supabaseSignIn(email, password || '');
     const user = await syncSupabaseUserAsync(authUser);
     return { user, token };
   }
 
   // Local SQLite Development Mode
-  let row = getUserByEmail(emailOrUsername);
+  let row = getUserByEmail(identifier);
   if (!row) {
-    row = getUserByUsername(emailOrUsername);
+    row = getUserByUsername(identifier);
   }
   if (!row) {
     throw new Error('User not found');

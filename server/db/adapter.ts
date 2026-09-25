@@ -70,6 +70,8 @@ export interface LayoutCacheEntity {
 }
 
 export interface BoringDatabaseAdapter {
+  readonly adapterType: 'sqlite' | 'supabase';
+
   // Users
   getUserById(id: string): Promise<UserEntity | null>;
   getUserByEmail(email: string): Promise<UserEntity | null>;
@@ -108,6 +110,8 @@ export interface BoringDatabaseAdapter {
  * SQLite Database Adapter (for Local Development & Fast Testing)
  */
 export class SqliteDatabaseAdapter implements BoringDatabaseAdapter {
+  readonly adapterType = 'sqlite' as const;
+
   async getUserById(id: string): Promise<UserEntity | null> {
     const stmt = db.prepare('SELECT * FROM users WHERE id = ?');
     return (stmt.get(id) as UserEntity) || null;
@@ -388,6 +392,8 @@ export class SqliteDatabaseAdapter implements BoringDatabaseAdapter {
  * Supabase Database Adapter (for Production Deployment on PostgreSQL)
  */
 export class SupabaseDatabaseAdapter implements BoringDatabaseAdapter {
+  readonly adapterType = 'supabase' as const;
+
   private getClient() {
     const client = getSupabaseAdminClient();
     if (!client) {
@@ -658,13 +664,57 @@ export class SupabaseDatabaseAdapter implements BoringDatabaseAdapter {
 // Singleton adapter instance
 let adapterInstance: BoringDatabaseAdapter | null = null;
 
+export type DatabaseType = 'supabase' | 'sqlite' | 'unconfigured';
+
+export function getDatabaseType(): DatabaseType {
+  const isVercel = Boolean(process.env.VERCEL);
+  const isProd = process.env.NODE_ENV === 'production';
+  const isTest = process.env.NODE_ENV === 'test';
+  const supabaseReady = isSupabaseConfigured();
+
+  if (isVercel || isProd) {
+    return supabaseReady ? 'supabase' : 'unconfigured';
+  }
+
+  if (supabaseReady && !isTest) {
+    return 'supabase';
+  }
+
+  return 'sqlite';
+}
+
+export function resetDatabaseAdapter(): void {
+  adapterInstance = null;
+}
+
 export function getDatabaseAdapter(): BoringDatabaseAdapter {
-  if (!adapterInstance) {
-    if (isSupabaseConfigured() && process.env.NODE_ENV !== 'test') {
-      adapterInstance = new SupabaseDatabaseAdapter();
-    } else {
-      adapterInstance = new SqliteDatabaseAdapter();
+  const isVercel = Boolean(process.env.VERCEL);
+  const isProd = process.env.NODE_ENV === 'production';
+  const isTest = process.env.NODE_ENV === 'test';
+  const supabaseReady = isSupabaseConfigured();
+
+  // VERCEL / PRODUCTION policy: Supabase MUST be selected; NEVER fall back to SQLite
+  if (isVercel || isProd) {
+    if (!supabaseReady) {
+      throw new Error('Production database is not configured');
     }
+    if (!adapterInstance || !(adapterInstance instanceof SupabaseDatabaseAdapter)) {
+      adapterInstance = new SupabaseDatabaseAdapter();
+    }
+    return adapterInstance;
+  }
+
+  // LOCAL DEVELOPMENT policy: Supabase if configured and not test, else SQLite allowed
+  if (supabaseReady && !isTest) {
+    if (!adapterInstance || !(adapterInstance instanceof SupabaseDatabaseAdapter)) {
+      adapterInstance = new SupabaseDatabaseAdapter();
+    }
+    return adapterInstance;
+  }
+
+  if (!adapterInstance || !(adapterInstance instanceof SqliteDatabaseAdapter)) {
+    adapterInstance = new SqliteDatabaseAdapter();
   }
   return adapterInstance;
 }
+

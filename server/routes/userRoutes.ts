@@ -9,15 +9,15 @@ import {
   getPrivacySettings,
 } from '../services/profileService.ts';
 import { processSocialLink } from '../services/socialLinkService.ts';
-import { getUserById } from '../services/authService.ts';
+import { getUserByIdAsync } from '../services/authService.ts';
 import { authMiddleware, optionalAuthMiddleware, type AuthenticatedRequest } from '../middleware/authMiddleware.ts';
 
 export const userRouter = Router();
 
 // GET /api/users/:id - Public user details
-userRouter.get('/users/:id', (req, res) => {
+userRouter.get('/users/:id', async (req, res) => {
   try {
-    const user = getUserById(req.params.id);
+    const user = await getUserByIdAsync(req.params.id);
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }

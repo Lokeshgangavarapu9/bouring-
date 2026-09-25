@@ -29,25 +29,8 @@ function getDbInstance() {
     return _dbInstance;
   }
   if ("1") {
-    try {
-      const { DatabaseSync } = require2("node:sqlite");
-      _dbInstance = new DatabaseSync(":memory:");
-      const schemaPath = path.join(__dirname, "schema.sql");
-      if (fs.existsSync(schemaPath)) {
-        const schemaSql = fs.readFileSync(schemaPath, "utf-8");
-        _dbInstance.exec(schemaSql);
-      }
-      for (const sql of safeMigrations) {
-        try {
-          _dbInstance.exec(sql);
-        } catch {
-        }
-      }
-      return _dbInstance;
-    } catch {
-      _dbInstance = createFallbackDb();
-      return _dbInstance;
-    }
+    _dbInstance = createFallbackDb();
+    return _dbInstance;
   }
   try {
     const DATA_DIR = path.resolve(__dirname, "../data");
@@ -297,6 +280,447 @@ var init_supabaseService = __esm({
   }
 });
 
+// server/db/adapter.ts
+function getDatabaseType() {
+  const isVercel2 = Boolean("1");
+  const isProd = process.env.NODE_ENV === "production";
+  const isTest = process.env.NODE_ENV === "test";
+  const supabaseReady = isSupabaseConfigured();
+  if (isVercel2 || isProd) {
+    return supabaseReady ? "supabase" : "unconfigured";
+  }
+  if (supabaseReady && !isTest) {
+    return "supabase";
+  }
+  return "sqlite";
+}
+function getDatabaseAdapter() {
+  const isVercel2 = Boolean("1");
+  const isProd = process.env.NODE_ENV === "production";
+  const isTest = process.env.NODE_ENV === "test";
+  const supabaseReady = isSupabaseConfigured();
+  if (isVercel2 || isProd) {
+    if (!supabaseReady) {
+      throw new Error("Production database is not configured");
+    }
+    if (!adapterInstance || !(adapterInstance instanceof SupabaseDatabaseAdapter)) {
+      adapterInstance = new SupabaseDatabaseAdapter();
+    }
+    return adapterInstance;
+  }
+  if (supabaseReady && !isTest) {
+    if (!adapterInstance || !(adapterInstance instanceof SupabaseDatabaseAdapter)) {
+      adapterInstance = new SupabaseDatabaseAdapter();
+    }
+    return adapterInstance;
+  }
+  if (!adapterInstance || !(adapterInstance instanceof SqliteDatabaseAdapter)) {
+    adapterInstance = new SqliteDatabaseAdapter();
+  }
+  return adapterInstance;
+}
+var SqliteDatabaseAdapter, SupabaseDatabaseAdapter, adapterInstance;
+var init_adapter = __esm({
+  "server/db/adapter.ts"() {
+    "use strict";
+    init_database();
+    init_supabaseService();
+    SqliteDatabaseAdapter = class {
+      adapterType = "sqlite";
+      async getUserById(id) {
+        const stmt = db.prepare("SELECT * FROM users WHERE id = ?");
+        return stmt.get(id) || null;
+      }
+      async getUserByEmail(email) {
+        const stmt = db.prepare("SELECT * FROM users WHERE LOWER(email) = LOWER(?)");
+        return stmt.get(email) || null;
+      }
+      async getUserByUsername(username) {
+        const stmt = db.prepare("SELECT * FROM users WHERE LOWER(username) = LOWER(?)");
+        return stmt.get(username) || null;
+      }
+      async getAllUsers() {
+        const stmt = db.prepare("SELECT * FROM users ORDER BY created_at ASC");
+        return stmt.all();
+      }
+      async createUser(user) {
+        const stmt = db.prepare(`
+      INSERT INTO users (
+        id, name, username, email, password_hash, avatar_url, bio, gender,
+        molecule_identity, molecule_smoky, molecule_twinkling, showcase_suggestions,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+        stmt.run(
+          user.id,
+          user.name,
+          user.username,
+          user.email,
+          user.password_hash,
+          user.avatar_url,
+          user.bio,
+          user.gender,
+          user.molecule_identity,
+          user.molecule_smoky,
+          user.molecule_twinkling,
+          user.showcase_suggestions,
+          user.created_at,
+          user.updated_at
+        );
+        db.prepare(`
+      INSERT INTO privacy_settings (user_id, profile_visibility, email_visibility, social_links_visibility)
+      VALUES (?, 'PUBLIC', 'CONNECTIONS_ONLY', 'PUBLIC')
+    `).run(user.id);
+        db.prepare(`
+      INSERT INTO user_graph_versions (user_id, graph_version, updated_at)
+      VALUES (?, 1, ?)
+    `).run(user.id, user.created_at);
+        return user;
+      }
+      async updateUser(id, updates) {
+        const existing = await this.getUserById(id);
+        if (!existing) throw new Error("User not found");
+        const merged = { ...existing, ...updates, updated_at: (/* @__PURE__ */ new Date()).toISOString() };
+        const stmt = db.prepare(`
+      UPDATE users SET
+        name = ?, username = ?, avatar_url = ?, bio = ?, gender = ?,
+        molecule_identity = ?, molecule_smoky = ?, molecule_twinkling = ?,
+        showcase_suggestions = ?, updated_at = ?
+      WHERE id = ?
+    `);
+        stmt.run(
+          merged.name,
+          merged.username,
+          merged.avatar_url,
+          merged.bio,
+          merged.gender,
+          merged.molecule_identity,
+          merged.molecule_smoky,
+          merged.molecule_twinkling,
+          merged.showcase_suggestions,
+          merged.updated_at,
+          id
+        );
+        return merged;
+      }
+      async getPrivacySettings(userId) {
+        const stmt = db.prepare("SELECT * FROM privacy_settings WHERE user_id = ?");
+        return stmt.get(userId) || null;
+      }
+      async updatePrivacySettings(userId, updates) {
+        const current = await this.getPrivacySettings(userId);
+        const merged = {
+          user_id: userId,
+          profile_visibility: updates.profile_visibility ?? current?.profile_visibility ?? "PUBLIC",
+          email_visibility: updates.email_visibility ?? current?.email_visibility ?? "CONNECTIONS_ONLY",
+          social_links_visibility: updates.social_links_visibility ?? current?.social_links_visibility ?? "PUBLIC"
+        };
+        const stmt = db.prepare(`
+      INSERT INTO privacy_settings (user_id, profile_visibility, email_visibility, social_links_visibility)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(user_id) DO UPDATE SET
+        profile_visibility = excluded.profile_visibility,
+        email_visibility = excluded.email_visibility,
+        social_links_visibility = excluded.social_links_visibility
+    `);
+        stmt.run(userId, merged.profile_visibility, merged.email_visibility, merged.social_links_visibility);
+        return merged;
+      }
+      async getRelationshipById(id) {
+        const stmt = db.prepare("SELECT * FROM relationships WHERE id = ?");
+        return stmt.get(id) || null;
+      }
+      async getRelationshipBetween(userA, userB) {
+        const stmt = db.prepare(`
+      SELECT * FROM relationships
+      WHERE requester_id = ? AND receiver_id = ?
+    `);
+        return stmt.get(userA, userB) || null;
+      }
+      async listUserRelationships(userId) {
+        const stmt = db.prepare(`
+      SELECT * FROM relationships
+      WHERE requester_id = ? OR receiver_id = ?
+      ORDER BY updated_at DESC
+    `);
+        return stmt.all(userId, userId);
+      }
+      async createRelationship(rel) {
+        const stmt = db.prepare(`
+      INSERT INTO relationships (
+        id, requester_id, receiver_id, status, created_at, updated_at,
+        accepted_at, mutual_at, disconnected_at, cancelled_at, version
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+        stmt.run(
+          rel.id,
+          rel.requester_id,
+          rel.receiver_id,
+          rel.status,
+          rel.created_at,
+          rel.updated_at,
+          rel.accepted_at || null,
+          rel.mutual_at || null,
+          rel.disconnected_at || null,
+          rel.cancelled_at || null,
+          rel.version || 1
+        );
+        return rel;
+      }
+      async updateRelationship(id, updates) {
+        const existing = await this.getRelationshipById(id);
+        if (!existing) throw new Error("Relationship not found");
+        const merged = { ...existing, ...updates, updated_at: (/* @__PURE__ */ new Date()).toISOString() };
+        const stmt = db.prepare(`
+      UPDATE relationships SET
+        status = ?, updated_at = ?, accepted_at = ?, mutual_at = ?,
+        disconnected_at = ?, cancelled_at = ?, version = ?
+      WHERE id = ?
+    `);
+        stmt.run(
+          merged.status,
+          merged.updated_at,
+          merged.accepted_at || null,
+          merged.mutual_at || null,
+          merged.disconnected_at || null,
+          merged.cancelled_at || null,
+          merged.version || 1,
+          id
+        );
+        return merged;
+      }
+      async deleteRelationship(id) {
+        const stmt = db.prepare("DELETE FROM relationships WHERE id = ?");
+        stmt.run(id);
+        return true;
+      }
+      async isMutual(userA, userB) {
+        const [first, second] = userA < userB ? [userA, userB] : [userB, userA];
+        const stmt = db.prepare("SELECT 1 FROM mutual_relationships WHERE user_a_id = ? AND user_b_id = ?");
+        return Boolean(stmt.get(first, second));
+      }
+      async getMutualPartners(userId) {
+        const stmt = db.prepare(`
+      SELECT CASE WHEN user_a_id = ? THEN user_b_id ELSE user_a_id END AS partner_id
+      FROM mutual_relationships
+      WHERE user_a_id = ? OR user_b_id = ?
+    `);
+        const rows = stmt.all(userId, userId, userId);
+        return rows.map((r) => r.partner_id);
+      }
+      async addMutual(userA, userB) {
+        const [first, second] = userA < userB ? [userA, userB] : [userB, userA];
+        const stmt = db.prepare(`
+      INSERT OR IGNORE INTO mutual_relationships (id, user_a_id, user_b_id, created_at)
+      VALUES (?, ?, ?, ?)
+    `);
+        stmt.run(`mut-${first}-${second}`, first, second, (/* @__PURE__ */ new Date()).toISOString());
+      }
+      async removeMutual(userA, userB) {
+        const [first, second] = userA < userB ? [userA, userB] : [userB, userA];
+        const stmt = db.prepare("DELETE FROM mutual_relationships WHERE user_a_id = ? AND user_b_id = ?");
+        stmt.run(first, second);
+      }
+      async getGraphVersion(userId) {
+        const stmt = db.prepare("SELECT graph_version FROM user_graph_versions WHERE user_id = ?");
+        const row = stmt.get(userId);
+        return row?.graph_version || 1;
+      }
+      async incrementGraphVersion(userId) {
+        const current = await this.getGraphVersion(userId);
+        const next = current + 1;
+        const stmt = db.prepare(`
+      INSERT INTO user_graph_versions (user_id, graph_version, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(user_id) DO UPDATE SET graph_version = ?, updated_at = ?
+    `);
+        const now = (/* @__PURE__ */ new Date()).toISOString();
+        stmt.run(userId, next, now, next, now);
+        return next;
+      }
+      async getCachedLayout(hostUserId, graphVersion, algorithmVersion) {
+        const stmt = db.prepare(`
+      SELECT * FROM layout_cache
+      WHERE host_user_id = ? AND graph_version = ? AND algorithm_version = ?
+    `);
+        return stmt.get(hostUserId, graphVersion, algorithmVersion) || null;
+      }
+      async saveCachedLayout(cache) {
+        const stmt = db.prepare(`
+      INSERT INTO layout_cache (
+        id, host_user_id, graph_version, algorithm_version, structure_class, layout_data, quality_metrics, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(host_user_id, graph_version, algorithm_version) DO UPDATE SET
+        structure_class = excluded.structure_class,
+        layout_data = excluded.layout_data,
+        quality_metrics = excluded.quality_metrics,
+        created_at = excluded.created_at
+    `);
+        stmt.run(
+          cache.id,
+          cache.host_user_id,
+          cache.graph_version,
+          cache.algorithm_version,
+          cache.structure_class,
+          cache.layout_data,
+          cache.quality_metrics,
+          cache.created_at
+        );
+      }
+      async invalidateLayoutCache(hostUserId) {
+        const stmt = db.prepare("DELETE FROM layout_cache WHERE host_user_id = ?");
+        stmt.run(hostUserId);
+      }
+    };
+    SupabaseDatabaseAdapter = class {
+      adapterType = "supabase";
+      getClient() {
+        const client = getSupabaseAdminClient();
+        if (!client) {
+          throw new Error("Supabase client is not available or configured.");
+        }
+        return client;
+      }
+      async getUserById(id) {
+        const { data, error } = await this.getClient().from("users").select("*").eq("id", id).maybeSingle();
+        if (error || !data) return null;
+        return data;
+      }
+      async getUserByEmail(email) {
+        const { data, error } = await this.getClient().from("users").select("*").ilike("email", email).maybeSingle();
+        if (error || !data) return null;
+        return data;
+      }
+      async getUserByUsername(username) {
+        const { data, error } = await this.getClient().from("users").select("*").ilike("username", username).maybeSingle();
+        if (error || !data) return null;
+        return data;
+      }
+      async getAllUsers() {
+        const { data, error } = await this.getClient().from("users").select("*").order("created_at", { ascending: true });
+        if (error || !data) return [];
+        return data;
+      }
+      async createUser(user) {
+        const { data, error } = await this.getClient().from("users").insert(user).select().single();
+        if (error) throw new Error(error.message);
+        await this.getClient().from("privacy_settings").upsert({
+          user_id: user.id,
+          profile_visibility: "PUBLIC",
+          email_visibility: "CONNECTIONS_ONLY",
+          social_links_visibility: "PUBLIC"
+        });
+        await this.getClient().from("user_graph_versions").upsert({
+          user_id: user.id,
+          graph_version: 1,
+          graph_hash: "",
+          updated_at: (/* @__PURE__ */ new Date()).toISOString()
+        });
+        return data;
+      }
+      async updateUser(id, updates) {
+        const { data, error } = await this.getClient().from("users").update({ ...updates, updated_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", id).select().single();
+        if (error) throw new Error(error.message);
+        return data;
+      }
+      async getPrivacySettings(userId) {
+        const { data, error } = await this.getClient().from("privacy_settings").select("*").eq("user_id", userId).maybeSingle();
+        if (error || !data) return null;
+        return data;
+      }
+      async updatePrivacySettings(userId, updates) {
+        const { data, error } = await this.getClient().from("privacy_settings").upsert({ user_id: userId, ...updates }).select().single();
+        if (error) throw new Error(error.message);
+        return data;
+      }
+      async getRelationshipById(id) {
+        const { data, error } = await this.getClient().from("relationships").select("*").eq("id", id).maybeSingle();
+        if (error || !data) return null;
+        return data;
+      }
+      async getRelationshipBetween(userA, userB) {
+        const { data, error } = await this.getClient().from("relationships").select("*").eq("requester_id", userA).eq("receiver_id", userB).maybeSingle();
+        if (error || !data) return null;
+        return data;
+      }
+      async listUserRelationships(userId) {
+        const { data, error } = await this.getClient().from("relationships").select("*").or(`requester_id.eq.${userId},receiver_id.eq.${userId}`).order("updated_at", { ascending: false });
+        if (error || !data) return [];
+        return data;
+      }
+      async createRelationship(rel) {
+        const { data, error } = await this.getClient().from("relationships").insert(rel).select().single();
+        if (error) throw new Error(error.message);
+        return data;
+      }
+      async updateRelationship(id, updates) {
+        const { data, error } = await this.getClient().from("relationships").update({ ...updates, updated_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", id).select().single();
+        if (error) throw new Error(error.message);
+        return data;
+      }
+      async deleteRelationship(id) {
+        const { error } = await this.getClient().from("relationships").delete().eq("id", id);
+        return !error;
+      }
+      async isMutual(userA, userB) {
+        const [first, second] = userA < userB ? [userA, userB] : [userB, userA];
+        const { count, error } = await this.getClient().from("mutual_relationships").select("*", { count: "exact", head: true }).eq("user_a_id", first).eq("user_b_id", second);
+        if (error) return false;
+        return (count || 0) > 0;
+      }
+      async getMutualPartners(userId) {
+        const client = this.getClient();
+        const { data: rowsA } = await client.from("mutual_relationships").select("user_b_id").eq("user_a_id", userId);
+        const { data: rowsB } = await client.from("mutual_relationships").select("user_a_id").eq("user_b_id", userId);
+        const partners = /* @__PURE__ */ new Set();
+        (rowsA || []).forEach((r) => partners.add(r.user_b_id));
+        (rowsB || []).forEach((r) => partners.add(r.user_a_id));
+        return Array.from(partners);
+      }
+      async addMutual(userA, userB) {
+        const [first, second] = userA < userB ? [userA, userB] : [userB, userA];
+        await this.getClient().from("mutual_relationships").upsert({
+          id: `mut-${first}-${second}`,
+          user_a_id: first,
+          user_b_id: second,
+          created_at: (/* @__PURE__ */ new Date()).toISOString()
+        });
+      }
+      async removeMutual(userA, userB) {
+        const [first, second] = userA < userB ? [userA, userB] : [userB, userA];
+        await this.getClient().from("mutual_relationships").delete().eq("user_a_id", first).eq("user_b_id", second);
+      }
+      async getGraphVersion(userId) {
+        const { data, error } = await this.getClient().from("user_graph_versions").select("graph_version").eq("user_id", userId).maybeSingle();
+        if (error || !data) return 1;
+        return data.graph_version || 1;
+      }
+      async incrementGraphVersion(userId) {
+        const current = await this.getGraphVersion(userId);
+        const next = current + 1;
+        await this.getClient().from("user_graph_versions").upsert({
+          user_id: userId,
+          graph_version: next,
+          updated_at: (/* @__PURE__ */ new Date()).toISOString()
+        });
+        return next;
+      }
+      async getCachedLayout(hostUserId, graphVersion, algorithmVersion) {
+        const { data, error } = await this.getClient().from("layout_cache").select("*").eq("host_user_id", hostUserId).eq("graph_version", graphVersion).eq("algorithm_version", algorithmVersion).maybeSingle();
+        if (error || !data) return null;
+        return data;
+      }
+      async saveCachedLayout(cache) {
+        await this.getClient().from("layout_cache").upsert(cache);
+      }
+      async invalidateLayoutCache(hostUserId) {
+        await this.getClient().from("layout_cache").delete().eq("host_user_id", hostUserId);
+      }
+    };
+    adapterInstance = null;
+  }
+});
+
 // server/services/authService.ts
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
@@ -324,24 +748,89 @@ function sanitizeUser(row) {
   };
 }
 function getUserById(id) {
-  const stmt = db.prepare("SELECT * FROM users WHERE id = ?");
-  const row = stmt.get(id);
-  return row ? sanitizeUser(row) : null;
+  if (userCache.has(id)) {
+    return userCache.get(id);
+  }
+  const isProduction = Boolean("1");
+  if (isProduction) {
+    return null;
+  }
+  try {
+    const stmt = db.prepare("SELECT * FROM users WHERE id = ?");
+    const row = stmt.get(id);
+    if (row) {
+      const sanitized = sanitizeUser(row);
+      userCache.set(id, sanitized);
+      return sanitized;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+async function getUserByIdAsync(id) {
+  if (userCache.has(id)) {
+    return userCache.get(id);
+  }
+  const isProduction = Boolean("1");
+  const supabaseMode = isSupabaseConfigured() && process.env.NODE_ENV !== "test";
+  if (isProduction || supabaseMode) {
+    try {
+      const adapter = getDatabaseAdapter();
+      const entity = await adapter.getUserById(id);
+      if (entity) {
+        const sanitized = sanitizeUser(entity);
+        userCache.set(id, sanitized);
+        return sanitized;
+      }
+      return null;
+    } catch (err) {
+      if (isProduction) throw err;
+      return null;
+    }
+  }
+  return getUserById(id);
 }
 function getUserByEmail(email) {
-  const stmt = db.prepare("SELECT * FROM users WHERE LOWER(email) = LOWER(?)");
-  const row = stmt.get(email);
-  return row || null;
+  try {
+    const stmt = db.prepare("SELECT * FROM users WHERE LOWER(email) = LOWER(?)");
+    const row = stmt.get(email);
+    return row || null;
+  } catch {
+    return null;
+  }
 }
 function getUserByUsername(username) {
-  const stmt = db.prepare("SELECT * FROM users WHERE LOWER(username) = LOWER(?)");
-  const row = stmt.get(username);
-  return row || null;
+  try {
+    const stmt = db.prepare("SELECT * FROM users WHERE LOWER(username) = LOWER(?)");
+    const row = stmt.get(username);
+    return row || null;
+  } catch {
+    return null;
+  }
 }
 function getAllUsers() {
-  const stmt = db.prepare("SELECT * FROM users ORDER BY created_at ASC");
-  const rows = stmt.all();
-  return rows.map(sanitizeUser);
+  try {
+    const stmt = db.prepare("SELECT * FROM users ORDER BY created_at ASC");
+    const rows = stmt.all();
+    return rows.map(sanitizeUser);
+  } catch {
+    return [];
+  }
+}
+async function getAllUsersAsync() {
+  const isProduction = Boolean("1");
+  const supabaseMode = isSupabaseConfigured() && process.env.NODE_ENV !== "test";
+  if (isProduction || supabaseMode) {
+    const adapter = getDatabaseAdapter();
+    const entities = await adapter.getAllUsers();
+    return entities.map((u) => {
+      const sanitized = sanitizeUser(u);
+      userCache.set(u.id, sanitized);
+      return sanitized;
+    });
+  }
+  return getAllUsers();
 }
 function generateToken(userId) {
   return jwt.sign({ userId }, JWT_SECRET, { expiresIn: "7d" });
@@ -467,7 +956,9 @@ async function syncSupabaseUserAsync(authUser, fallbackName, fallbackUsername) {
         graph_version: 1,
         updated_at: now
       });
-      return sanitizeUser(newUser);
+      const sanitized = sanitizeUser(newUser);
+      userCache.set(authUser.id, sanitized);
+      return sanitized;
     }
   }
   return syncSupabaseUser(authUser, fallbackName, fallbackUsername);
@@ -477,14 +968,24 @@ async function signup(name, username, email, password) {
   if (!name.trim()) throw new Error("Name is required");
   if (!cleanUsername) throw new Error("Valid username is required");
   if (!email.trim() || !email.includes("@")) throw new Error("Valid email is required");
-  if (getUserByEmail(email)) throw new Error("Email already registered");
-  if (getUserByUsername(cleanUsername)) throw new Error("Username already taken");
-  if (isSupabaseConfigured() && process.env.NODE_ENV !== "test") {
+  const isProduction = Boolean("1");
+  const supabaseMode = isSupabaseConfigured() && process.env.NODE_ENV !== "test";
+  if (isProduction && !supabaseMode) {
+    throw new Error("Production database is not configured");
+  }
+  if (supabaseMode) {
+    const adapter = getDatabaseAdapter();
+    const existingEmail = await adapter.getUserByEmail(email.trim());
+    if (existingEmail) throw new Error("Email already registered");
+    const existingUsername = await adapter.getUserByUsername(cleanUsername);
+    if (existingUsername) throw new Error("Username already taken");
     const { authUser, session } = await supabaseSignUp(name.trim(), cleanUsername, email.trim(), password || "password123");
     const user2 = await syncSupabaseUserAsync(authUser, name.trim(), cleanUsername);
     const token2 = session?.access_token || generateToken(user2.id);
     return { user: user2, token: token2 };
   }
+  if (getUserByEmail(email)) throw new Error("Email already registered");
+  if (getUserByUsername(cleanUsername)) throw new Error("Username already taken");
   const passwordHash = bcrypt.hashSync(password || "password123", 10);
   const now = (/* @__PURE__ */ new Date()).toISOString();
   const id = `user-${Date.now()}`;
@@ -527,14 +1028,32 @@ async function signup(name, username, email, password) {
   return { user, token };
 }
 async function login(emailOrUsername, password) {
-  if (isSupabaseConfigured() && process.env.NODE_ENV !== "test" && emailOrUsername.includes("@")) {
-    const { authUser, token: token2 } = await supabaseSignIn(emailOrUsername.trim(), password || "");
+  const identifier = emailOrUsername.trim();
+  if (!identifier) {
+    throw new Error("Email or username is required");
+  }
+  const isProduction = Boolean("1");
+  const supabaseMode = isSupabaseConfigured() && process.env.NODE_ENV !== "test";
+  if (isProduction && !supabaseMode) {
+    throw new Error("Production database is not configured");
+  }
+  if (supabaseMode) {
+    let email = identifier;
+    if (!email.includes("@")) {
+      const adapter = getDatabaseAdapter();
+      const userByUname = await adapter.getUserByUsername(identifier);
+      if (!userByUname || !userByUname.email) {
+        throw new Error("Invalid credentials");
+      }
+      email = userByUname.email;
+    }
+    const { authUser, token: token2 } = await supabaseSignIn(email, password || "");
     const user = await syncSupabaseUserAsync(authUser);
     return { user, token: token2 };
   }
-  let row = getUserByEmail(emailOrUsername);
+  let row = getUserByEmail(identifier);
   if (!row) {
-    row = getUserByUsername(emailOrUsername);
+    row = getUserByUsername(identifier);
   }
   if (!row) {
     throw new Error("User not found");
@@ -545,12 +1064,14 @@ async function login(emailOrUsername, password) {
   const token = generateToken(row.id);
   return { user: sanitizeUser(row), token };
 }
-var JWT_SECRET;
+var userCache, JWT_SECRET;
 var init_authService = __esm({
   "server/services/authService.ts"() {
     "use strict";
     init_database();
+    init_adapter();
     init_supabaseService();
+    userCache = /* @__PURE__ */ new Map();
     JWT_SECRET = process.env.JWT_SECRET || "boring-secret-key-2026-antigravity";
   }
 });
@@ -1003,51 +1524,61 @@ import { Router } from "express";
 
 // server/middleware/authMiddleware.ts
 init_authService();
-function authMiddleware(req, res, next) {
-  const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith("Bearer ")) {
-    const token = authHeader.substring(7);
-    const decoded = verifyToken(token);
-    if (decoded) {
-      const user = getUserById(decoded.userId);
+async function authMiddleware(req, res, next) {
+  try {
+    let userId = null;
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      const token = authHeader.substring(7);
+      const decoded = verifyToken(token);
+      if (decoded) {
+        userId = decoded.userId;
+      }
+    }
+    if (!userId) {
+      const xUserId = req.headers["x-user-id"];
+      if (typeof xUserId === "string" && xUserId.trim()) {
+        userId = xUserId.trim();
+      }
+    }
+    if (userId) {
+      const user = await getUserByIdAsync(userId);
       if (user) {
         req.userId = user.id;
         req.user = user;
         return next();
       }
     }
+    res.status(401).json({ error: "Unauthorized. Authentication token or user session required." });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Authentication error" });
   }
-  const xUserId = req.headers["x-user-id"];
-  if (typeof xUserId === "string" && xUserId.trim()) {
-    const user = getUserById(xUserId.trim());
-    if (user) {
-      req.userId = user.id;
-      req.user = user;
-      return next();
-    }
-  }
-  res.status(401).json({ error: "Unauthorized. Authentication token or user session required." });
 }
-function optionalAuthMiddleware(req, _res, next) {
-  const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith("Bearer ")) {
-    const token = authHeader.substring(7);
-    const decoded = verifyToken(token);
-    if (decoded) {
-      const user = getUserById(decoded.userId);
+async function optionalAuthMiddleware(req, _res, next) {
+  try {
+    let userId = null;
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      const token = authHeader.substring(7);
+      const decoded = verifyToken(token);
+      if (decoded) {
+        userId = decoded.userId;
+      }
+    }
+    if (!userId) {
+      const xUserId = req.headers["x-user-id"];
+      if (typeof xUserId === "string" && xUserId.trim()) {
+        userId = xUserId.trim();
+      }
+    }
+    if (userId) {
+      const user = await getUserByIdAsync(userId);
       if (user) {
         req.userId = user.id;
         req.user = user;
       }
     }
-  }
-  const xUserId = req.headers["x-user-id"];
-  if (!req.userId && typeof xUserId === "string" && xUserId.trim()) {
-    const user = getUserById(xUserId.trim());
-    if (user) {
-      req.userId = user.id;
-      req.user = user;
-    }
+  } catch {
   }
   next();
 }
@@ -1134,18 +1665,18 @@ authRouter.post("/logout", (_req, res) => {
 authRouter.get("/me", authMiddleware, (req, res) => {
   res.json({ user: req.user });
 });
-authRouter.get("/users", (_req, res) => {
+authRouter.get("/users", async (_req, res) => {
   try {
-    const users = getAllUsers();
+    const users = await getAllUsersAsync();
     res.json({ users });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
-authRouter.post("/switch", (req, res) => {
+authRouter.post("/switch", async (req, res) => {
   try {
     const { userId } = req.body;
-    const user = getUserById(userId);
+    const user = await getUserByIdAsync(userId);
     if (!user) {
       return res.status(404).json({ error: "User not found" });
     }
@@ -1641,9 +2172,9 @@ function removeSocialProfile(userId, profileId) {
 // server/routes/userRoutes.ts
 init_authService();
 var userRouter = Router3();
-userRouter.get("/users/:id", (req, res) => {
+userRouter.get("/users/:id", async (req, res) => {
   try {
-    const user = getUserById(req.params.id);
+    const user = await getUserByIdAsync(req.params.id);
     if (!user) {
       return res.status(404).json({ error: "User not found" });
     }
@@ -2612,6 +3143,7 @@ networkRouter.get("/:userId/summary", optionalAuthMiddleware, async (req, res) =
 });
 
 // server/index.ts
+init_adapter();
 try {
   process.loadEnvFile();
 } catch {
@@ -2642,7 +3174,8 @@ app.get("/api/health", (_req, res) => {
   res.json({
     status: "ok",
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-    system: "Boring Molecular Social Graph Engine"
+    system: "Boring Molecular Social Graph Engine",
+    database: getDatabaseType()
   });
 });
 app.use("/api/auth", authRouter);

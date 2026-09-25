@@ -51,25 +51,12 @@ function getDbInstance() {
   }
 
   // In Vercel serverless environment, primary database is Supabase PostgreSQL.
-  // We use an in-memory SQLite database (or mock if node:sqlite is absent) to avoid EROFS.
+  // SQLite must NOT be instantiated or selected.
   if (process.env.VERCEL) {
-    try {
-      const { DatabaseSync } = require('node:sqlite');
-      _dbInstance = new DatabaseSync(':memory:');
-      const schemaPath = path.join(__dirname, 'schema.sql');
-      if (fs.existsSync(schemaPath)) {
-        const schemaSql = fs.readFileSync(schemaPath, 'utf-8');
-        _dbInstance.exec(schemaSql);
-      }
-      for (const sql of safeMigrations) {
-        try { _dbInstance.exec(sql); } catch {}
-      }
-      return _dbInstance;
-    } catch {
-      _dbInstance = createFallbackDb();
-      return _dbInstance;
-    }
+    _dbInstance = createFallbackDb();
+    return _dbInstance;
   }
+
 
   // Local development / testing: Persistent SQLite
   try {

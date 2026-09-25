@@ -1,5 +1,5 @@
 import { Router, type Response } from 'express';
-import { signup, login, getAllUsers, getUserById } from '../services/authService.ts';
+import { signup, login, getAllUsersAsync, getUserByIdAsync } from '../services/authService.ts';
 import {
   getPublicSupabaseConfig,
   supabaseRequestPasswordReset,
@@ -115,9 +115,9 @@ authRouter.get('/me', authMiddleware, (req: AuthenticatedRequest, res: Response)
 });
 
 // GET /api/auth/users (Directory of users for peer discovery & dev switching)
-authRouter.get('/users', (_req, res) => {
+authRouter.get('/users', async (_req, res) => {
   try {
-    const users = getAllUsers();
+    const users = await getAllUsersAsync();
     res.json({ users });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -125,10 +125,10 @@ authRouter.get('/users', (_req, res) => {
 });
 
 // POST /api/auth/switch (Developer / demo convenience user switcher)
-authRouter.post('/switch', (req, res) => {
+authRouter.post('/switch', async (req, res) => {
   try {
     const { userId } = req.body;
-    const user = getUserById(userId);
+    const user = await getUserByIdAsync(userId);
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }

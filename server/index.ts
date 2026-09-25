@@ -12,6 +12,7 @@ import { authRouter } from './routes/authRoutes.ts';
 import { relationshipRouter } from './routes/relationshipRoutes.ts';
 import { userRouter } from './routes/userRoutes.ts';
 import { networkRouter } from './routes/networkRoutes.ts';
+import { getDatabaseType } from './db/adapter.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -49,6 +50,7 @@ app.get('/api/health', (_req, res) => {
     status: 'ok',
     timestamp: new Date().toISOString(),
     system: 'Boring Molecular Social Graph Engine',
+    database: getDatabaseType(),
   });
 });
 
