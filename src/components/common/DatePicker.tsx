@@ -20,10 +20,54 @@ const MONTHS = [
 
 const DAYS_OF_WEEK = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
 
+// Convert ISO (YYYY-MM-DD) to Display (DD/MM/YYYY)
+export function isoToDisplay(isoDate: string): string {
+  if (!isoDate || !/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) return '';
+  const [y, m, d] = isoDate.split('-');
+  return `${d}/${m}/${y}`;
+}
+
+// Convert Display (DD/MM/YYYY) to ISO (YYYY-MM-DD), returning '' if invalid calendar date
+export function displayToIso(displayDate: string, maxDateStr?: string, minDateStr?: string): string {
+  if (!/^\d{2}\/\d{2}\/\d{4}$/.test(displayDate)) return '';
+  const [dStr, mStr, yStr] = displayDate.split('/');
+  const day = parseInt(dStr, 10);
+  const month = parseInt(mStr, 10);
+  const year = parseInt(yStr, 10);
+
+  const minYear = minDateStr ? parseInt(minDateStr.split('-')[0], 10) : 1900;
+  if (year < minYear) return '';
+
+  const today = new Date();
+  const currentYear = today.getFullYear();
+  if (year > currentYear) return '';
+
+  if (month < 1 || month > 12) return '';
+  if (day < 1 || day > 31) return '';
+
+  // Validate exact calendar day (e.g. reject Feb 31 or Apr 31)
+  const dateObj = new Date(year, month - 1, day);
+  if (
+    isNaN(dateObj.getTime()) ||
+    dateObj.getFullYear() !== year ||
+    dateObj.getMonth() !== month - 1 ||
+    dateObj.getDate() !== day
+  ) {
+    return '';
+  }
+
+  // Reject future dates
+  const maxD = maxDateStr ? new Date(maxDateStr + 'T23:59:59') : today;
+  maxD.setHours(23, 59, 59, 999);
+  if (dateObj > maxD) return '';
+
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
 export const DatePicker: React.FC<DatePickerProps> = ({
   value,
   onChange,
-  placeholder = 'Select your date of birth',
+  placeholder = 'DD/MM/YYYY',
   label = 'Date of Birth',
   error,
   helperText,
@@ -34,6 +78,20 @@ export const DatePicker: React.FC<DatePickerProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const inputId = useId();
   const [isOpen, setIsOpen] = useState(false);
+  const [popoverPos, setPopoverPos] = useState<'down' | 'up'>('down');
+
+  // Input field display string (DD/MM/YYYY)
+  const [inputText, setInputText] = useState<string>(() => isoToDisplay(value));
+
+  // Sync input text when parent value (YYYY-MM-DD) changes externally
+  useEffect(() => {
+    if (value && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      setInputText(isoToDisplay(value));
+    } else if (!value && inputText.length === 10) {
+      // If external value is cleared, clear input
+      setInputText('');
+    }
+  }, [value]);
 
   // Default maxDate to today (local YYYY-MM-DD)
   const today = new Date();
@@ -45,7 +103,7 @@ export const DatePicker: React.FC<DatePickerProps> = ({
   const [viewYear, setViewYear] = useState<number>(!isNaN(parsedInitial.getTime()) ? parsedInitial.getFullYear() : today.getFullYear() - 20);
   const [viewMonth, setViewMonth] = useState<number>(!isNaN(parsedInitial.getTime()) ? parsedInitial.getMonth() : 0);
 
-  // Sync calendar view year/month when value changes
+  // Sync calendar view when value changes
   useEffect(() => {
     if (value) {
       const d = new Date(value + 'T00:00:00');
@@ -55,6 +113,22 @@ export const DatePicker: React.FC<DatePickerProps> = ({
       }
     }
   }, [value]);
+
+  // Handle smart popover positioning (up vs down)
+  const toggleCalendar = () => {
+    if (disabled) return;
+    if (!isOpen && containerRef.current) {
+      const rect = containerRef.current.getBoundingClientRect();
+      const spaceBelow = window.innerHeight - rect.bottom;
+      // Popover height is ~300px
+      if (spaceBelow < 310 && rect.top > 310) {
+        setPopoverPos('up');
+      } else {
+        setPopoverPos('down');
+      }
+    }
+    setIsOpen(prev => !prev);
+  };
 
   // Click outside to close
   useEffect(() => {
@@ -81,6 +155,42 @@ export const DatePicker: React.FC<DatePickerProps> = ({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen]);
+
+  // Manual typing change handler with automatic "/" insertion
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const raw = e.target.value;
+    const nativeEvent = e.nativeEvent as InputEvent;
+    const isDeleting = nativeEvent.inputType?.startsWith('delete') || false;
+
+    // Extract digits only up to 8 max (DDMMYYYY)
+    const digits = raw.replace(/\D/g, '').slice(0, 8);
+
+    let formatted = '';
+    if (digits.length === 0) {
+      formatted = '';
+    } else if (digits.length <= 2) {
+      formatted = (digits.length === 2 && !isDeleting) ? `${digits}/` : digits;
+    } else if (digits.length <= 4) {
+      const day = digits.slice(0, 2);
+      const month = digits.slice(2);
+      formatted = (digits.length === 4 && !isDeleting) ? `${day}/${month}/` : `${day}/${month}`;
+    } else {
+      const day = digits.slice(0, 2);
+      const month = digits.slice(2, 4);
+      const year = digits.slice(4, 8);
+      formatted = `${day}/${month}/${year}`;
+    }
+
+    setInputText(formatted);
+
+    // Validate and convert to ISO when length reaches 10 (DD/MM/YYYY)
+    if (formatted.length === 10) {
+      const iso = displayToIso(formatted, effectiveMaxDate, minDate);
+      onChange(iso); // Passes YYYY-MM-DD if valid, or '' if invalid
+    } else {
+      onChange(''); // Incomplete date
+    }
+  };
 
   // Generate Year options from current year down to minYear (e.g. 1900)
   const currentYear = today.getFullYear();
@@ -118,6 +228,7 @@ export const DatePicker: React.FC<DatePickerProps> = ({
   const handleSelectDay = (day: number) => {
     const dateStr = `${viewYear}-${String(viewMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
     onChange(dateStr);
+    setInputText(isoToDisplay(dateStr));
     setIsOpen(false);
   };
 
@@ -139,25 +250,6 @@ export const DatePicker: React.FC<DatePickerProps> = ({
     return todayStr === dateStr;
   };
 
-  // Format display text (e.g. "October 14, 1998")
-  const formatDisplay = (val: string) => {
-    if (!val) return '';
-    try {
-      const parts = val.split('-');
-      if (parts.length === 3) {
-        const y = parseInt(parts[0], 10);
-        const m = parseInt(parts[1], 10) - 1;
-        const d = parseInt(parts[2], 10);
-        if (m >= 0 && m < 12 && d > 0 && d <= 31) {
-          return `${MONTHS[m]} ${d}, ${y}`;
-        }
-      }
-      return val;
-    } catch {
-      return val;
-    }
-  };
-
   return (
     <div className="relative w-full" ref={containerRef}>
       {label && (
@@ -166,51 +258,57 @@ export const DatePicker: React.FC<DatePickerProps> = ({
         </label>
       )}
 
-      {/* Input / Trigger */}
-      <div
-        id={inputId}
-        role="button"
-        tabIndex={disabled ? -1 : 0}
-        aria-haspopup="dialog"
-        aria-expanded={isOpen}
-        onClick={() => !disabled && setIsOpen(prev => !prev)}
-        onKeyDown={(e) => {
-          if (!disabled && (e.key === 'Enter' || e.key === ' ')) {
-            e.preventDefault();
-            setIsOpen(prev => !prev);
-          }
-        }}
-        className={`w-full flex items-center justify-between rounded-xl border bg-white/80 px-3.5 py-2 text-sm transition-all cursor-pointer select-none ${
-          disabled
-            ? 'opacity-50 cursor-not-allowed bg-slate-50'
-            : isOpen
-            ? 'border-indigo-500 ring-2 ring-indigo-500/20 shadow-xs'
-            : error
-            ? 'border-rose-300 focus:border-rose-500 focus:ring-1 focus:ring-rose-500'
-            : 'border-slate-200 hover:border-slate-300'
-        }`}
-      >
-        <div className="flex items-center gap-2.5 truncate">
-          <CalendarIcon className={`h-4 w-4 shrink-0 transition-colors ${isOpen ? 'text-indigo-600' : 'text-slate-400'}`} />
-          <span className={`truncate ${value ? 'text-slate-900 font-medium' : 'text-slate-400'}`}>
-            {value ? formatDisplay(value) : placeholder}
-          </span>
-        </div>
+      {/* Input Field with Calendar Trigger Button */}
+      <div className="relative flex items-center">
+        <input
+          id={inputId}
+          type="text"
+          inputMode="numeric"
+          value={inputText}
+          onChange={handleInputChange}
+          placeholder={placeholder}
+          disabled={disabled}
+          maxLength={10}
+          className={`w-full rounded-xl border bg-white/80 pl-3.5 pr-16 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none transition-all ${
+            disabled
+              ? 'opacity-50 cursor-not-allowed bg-slate-50'
+              : isOpen
+              ? 'border-indigo-500 ring-2 ring-indigo-500/20 shadow-xs'
+              : error
+              ? 'border-rose-300 focus:border-rose-500 focus:ring-1 focus:ring-rose-500'
+              : 'border-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500'
+          }`}
+        />
 
-        {value && !disabled && (
+        <div className="absolute right-2 flex items-center gap-1">
+          {inputText && !disabled && (
+            <button
+              type="button"
+              onClick={() => {
+                setInputText('');
+                onChange('');
+              }}
+              className="p-1 rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+              title="Clear date"
+              aria-label="Clear date"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+
           <button
             type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onChange('');
-            }}
-            className="p-1 rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
-            title="Clear date"
-            aria-label="Clear date"
+            disabled={disabled}
+            onClick={toggleCalendar}
+            className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+              isOpen ? 'bg-indigo-50 text-indigo-600' : 'text-slate-400 hover:text-slate-700 hover:bg-slate-100'
+            }`}
+            title="Toggle calendar picker"
+            aria-label="Toggle calendar picker"
           >
-            <X className="h-3.5 w-3.5" />
+            <CalendarIcon className="h-4 w-4" />
           </button>
-        )}
+        </div>
       </div>
 
       {error ? (
@@ -223,35 +321,37 @@ export const DatePicker: React.FC<DatePickerProps> = ({
         </p>
       ) : null}
 
-      {/* Calendar Popover */}
+      {/* Compact Viewport-Aware Calendar Popover */}
       {isOpen && (
         <div
           role="dialog"
           aria-label="Calendar date picker"
-          className="absolute z-50 mt-1.5 w-72 sm:w-80 rounded-2xl border border-slate-200/90 bg-white/95 p-4 shadow-2xl backdrop-blur-md animate-in fade-in zoom-in-95 duration-150"
+          className={`absolute z-50 w-[280px] sm:w-[290px] rounded-2xl border border-slate-200/90 bg-white p-3 shadow-xl backdrop-blur-md animate-in fade-in zoom-in-95 duration-150 ${
+            popoverPos === 'up' ? 'bottom-full mb-2' : 'top-full mt-2'
+          }`}
         >
           {/* Header: Month & Year controls */}
-          <div className="flex items-center justify-between gap-1 mb-3">
+          <div className="flex items-center justify-between gap-1 mb-2">
             <button
               type="button"
               onClick={handlePrevMonth}
-              className="p-1.5 rounded-lg text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer"
+              className="p-1 rounded-lg text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer"
               aria-label="Previous month"
             >
-              <ChevronLeft className="h-4 w-4" />
+              <ChevronLeft className="h-3.5 w-3.5" />
             </button>
 
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1">
               {/* Month Dropdown */}
               <select
                 value={viewMonth}
                 onChange={(e) => setViewMonth(parseInt(e.target.value, 10))}
-                className="text-xs font-semibold text-slate-800 bg-slate-100/80 hover:bg-slate-200/70 border border-slate-200 rounded-lg px-2 py-1 focus:outline-none cursor-pointer"
+                className="text-xs font-semibold text-slate-800 bg-slate-100/90 hover:bg-slate-200/80 border border-slate-200 rounded-lg px-1.5 py-0.5 focus:outline-none cursor-pointer"
                 aria-label="Select month"
               >
                 {MONTHS.map((m, idx) => (
                   <option key={m} value={idx}>
-                    {m}
+                    {m.slice(0, 3)}
                   </option>
                 ))}
               </select>
@@ -260,7 +360,7 @@ export const DatePicker: React.FC<DatePickerProps> = ({
               <select
                 value={viewYear}
                 onChange={(e) => setViewYear(parseInt(e.target.value, 10))}
-                className="text-xs font-semibold text-slate-800 bg-slate-100/80 hover:bg-slate-200/70 border border-slate-200 rounded-lg px-2 py-1 focus:outline-none cursor-pointer"
+                className="text-xs font-semibold text-slate-800 bg-slate-100/90 hover:bg-slate-200/80 border border-slate-200 rounded-lg px-1.5 py-0.5 focus:outline-none cursor-pointer"
                 aria-label="Select year"
               >
                 {years.map(y => (
@@ -275,27 +375,27 @@ export const DatePicker: React.FC<DatePickerProps> = ({
               type="button"
               onClick={handleNextMonth}
               disabled={viewYear === currentYear && viewMonth >= today.getMonth()}
-              className="p-1.5 rounded-lg text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+              className="p-1 rounded-lg text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
               aria-label="Next month"
             >
-              <ChevronRight className="h-4 w-4" />
+              <ChevronRight className="h-3.5 w-3.5" />
             </button>
           </div>
 
           {/* Days of week */}
-          <div className="grid grid-cols-7 gap-1 text-center mb-1">
+          <div className="grid grid-cols-7 gap-0.5 text-center mb-1">
             {DAYS_OF_WEEK.map(d => (
-              <span key={d} className="text-[11px] font-semibold text-slate-400 py-1">
+              <span key={d} className="text-[10px] font-semibold text-slate-400 py-0.5">
                 {d}
               </span>
             ))}
           </div>
 
           {/* Days Grid */}
-          <div className="grid grid-cols-7 gap-1">
+          <div className="grid grid-cols-7 gap-0.5">
             {/* Blank leading slots */}
             {Array.from({ length: firstDayOfWeek }).map((_, idx) => (
-              <div key={`blank-${idx}`} className="h-8 w-8" />
+              <div key={`blank-${idx}`} className="h-7 w-7" />
             ))}
 
             {/* Days in Month */}
@@ -311,7 +411,7 @@ export const DatePicker: React.FC<DatePickerProps> = ({
                   type="button"
                   disabled={disabledDay}
                   onClick={() => handleSelectDay(day)}
-                  className={`h-8 w-8 mx-auto flex items-center justify-center rounded-xl text-xs font-medium transition-all ${
+                  className={`h-7 w-7 mx-auto flex items-center justify-center rounded-lg text-xs font-medium transition-all ${
                     selected
                       ? 'bg-slate-900 text-white font-semibold shadow-xs scale-105'
                       : todayDate
@@ -328,10 +428,10 @@ export const DatePicker: React.FC<DatePickerProps> = ({
           </div>
 
           {/* Footer note */}
-          <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-400">
+          <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-400">
             <span>Date of Birth recovery</span>
             {value && (
-              <span className="font-mono text-slate-600 bg-slate-50 px-1.5 py-0.5 rounded">
+              <span className="font-mono text-slate-600 bg-slate-50 px-1 py-0.5 rounded text-[10px]">
                 {value}
               </span>
             )}
