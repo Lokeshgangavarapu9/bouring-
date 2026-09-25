@@ -30,6 +30,7 @@ export interface SanitizedUser {
   bio: string;
   gender: string;
   moleculeIdentity: string;
+  molecule_identity: string;
   moleculeSmoky: boolean;
   moleculeTwinkling: boolean;
   showcase_suggestions: string[];
@@ -42,6 +43,8 @@ export function sanitizeUser(row: UserRow): SanitizedUser {
     showcase = JSON.parse(row.showcase_suggestions || '[]');
   } catch {}
 
+  const moleculeId = row.molecule_identity || 'default';
+
   return {
     id: row.id,
     name: row.name,
@@ -50,7 +53,8 @@ export function sanitizeUser(row: UserRow): SanitizedUser {
     avatar_url: row.avatar_url,
     bio: row.bio || '',
     gender: row.gender || '',
-    moleculeIdentity: row.molecule_identity || 'default',
+    moleculeIdentity: moleculeId,
+    molecule_identity: moleculeId,
     moleculeSmoky: Boolean(row.molecule_smoky),
     moleculeTwinkling: Boolean(row.molecule_twinkling),
     showcase_suggestions: showcase,
@@ -78,7 +82,7 @@ export function getUserByUsername(username: string): UserRow | null {
 
 export function getAllUsers(): SanitizedUser[] {
   const stmt = db.prepare('SELECT * FROM users ORDER BY created_at ASC');
-  const rows = stmt.all() as UserRow[];
+  const rows = stmt.all() as unknown as UserRow[];
   return rows.map(sanitizeUser);
 }
 
@@ -106,7 +110,7 @@ export function signup(name: string, username: string, email: string, password?:
   const passwordHash = bcrypt.hashSync(password || 'password123', 10);
   const now = new Date().toISOString();
   const id = `user-${Date.now()}`;
-  const avatarUrl = `https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80`;
+  const avatarUrl = '';
 
   const insertUser = db.prepare(`
     INSERT INTO users (
@@ -123,12 +127,12 @@ export function signup(name: string, username: string, email: string, password?:
     email.toLowerCase().trim(),
     passwordHash,
     avatarUrl,
-    'Molecule explorer',
+    '',
     '',
     'default',
     0,
     0,
-    JSON.stringify(['Spatial Graph Theory', 'Aesthetic Computing']),
+    JSON.stringify([]),
     now,
     now
   );

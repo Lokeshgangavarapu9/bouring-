@@ -54,6 +54,16 @@ export function isMutual(userA: string, userB: string): boolean {
 }
 
 /**
+ * Deterministically verify that mutual relationship is backed by reciprocal ACCEPTED_ONE_WAY records
+ */
+export function isMutualVerified(userA: string, userB: string): boolean {
+  if (!isMutual(userA, userB)) return false;
+  const rel1 = getDirectedRelationship(userA, userB);
+  const rel2 = getDirectedRelationship(userB, userA);
+  return Boolean(rel1 && rel1.status === 'ACCEPTED_ONE_WAY' && rel2 && rel2.status === 'ACCEPTED_ONE_WAY');
+}
+
+/**
  * Get all mutual partner IDs for a given user
  */
 export function getMutualPartnerIds(userId: string): string[] {
@@ -62,7 +72,7 @@ export function getMutualPartnerIds(userId: string): string[] {
     FROM mutual_relationships
     WHERE user_a_id = ? OR user_b_id = ?
   `);
-  const rows = stmt.all(userId, userId, userId) as { partner_id: string }[];
+  const rows = stmt.all(userId, userId, userId) as unknown as { partner_id: string }[];
   return rows.map(r => r.partner_id);
 }
 
@@ -84,7 +94,7 @@ export function getUserRelationships(userId: string): RelationshipRow[] {
     WHERE requester_id = ? OR receiver_id = ?
     ORDER BY created_at DESC
   `);
-  return stmt.all(userId, userId) as RelationshipRow[];
+  return stmt.all(userId, userId) as unknown as RelationshipRow[];
 }
 
 /**
@@ -97,7 +107,7 @@ export function sendRequest(requesterId: string, receiverId: string): Relationsh
 
   // Check if users exist
   const userCheck = db.prepare('SELECT id FROM users WHERE id IN (?, ?)');
-  const foundUsers = userCheck.all(requesterId, receiverId) as { id: string }[];
+  const foundUsers = userCheck.all(requesterId, receiverId) as unknown as { id: string }[];
   if (foundUsers.length < 2) {
     throw new Error('One or both users do not exist');
   }
@@ -167,10 +177,10 @@ export function acceptRequest(relationshipId: string, currentUserId: string): Re
     const now = new Date().toISOString();
     const updateStmt = db.prepare(`
       UPDATE relationships
-      SET status = 'ACCEPTED_ONE_WAY', updated_at = ?
+      SET status = 'ACCEPTED_ONE_WAY', accepted_at = ?, updated_at = ?
       WHERE id = ?
     `);
-    updateStmt.run(now, rel.id);
+    updateStmt.run(now, now, rel.id);
 
     return {
       ...rel,
@@ -212,7 +222,7 @@ export function cancelRequest(relationshipId: string, currentUserId: string): Re
     if (rel.status !== 'REQUESTED') throw new Error(`Cannot cancel request in status ${rel.status}`);
 
     const now = new Date().toISOString();
-    db.prepare("UPDATE relationships SET status = 'CANCELLED', updated_at = ? WHERE id = ?").run(now, rel.id);
+    db.prepare("UPDATE relationships SET status = 'CANCELLED', cancelled_at = ?, updated_at = ? WHERE id = ?").run(now, now, rel.id);
 
     return { ...rel, status: 'CANCELLED', updated_at: now };
   });
@@ -251,9 +261,9 @@ export function connectBack(currentUserId: string, targetUserId: string): {
     if (!reverseRel) {
       const newId = `rel-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
       db.prepare(`
-        INSERT INTO relationships (id, requester_id, receiver_id, status, created_at, updated_at)
-        VALUES (?, ?, ?, 'ACCEPTED_ONE_WAY', ?, ?)
-      `).run(newId, currentUserId, targetUserId, now, now);
+        INSERT INTO relationships (id, requester_id, receiver_id, status, accepted_at, mutual_at, created_at, updated_at)
+        VALUES (?, ?, ?, 'ACCEPTED_ONE_WAY', ?, ?, ?, ?)
+      `).run(newId, currentUserId, targetUserId, now, now, now, now);
 
       reverseRel = {
         id: newId,
@@ -266,12 +276,15 @@ export function connectBack(currentUserId: string, targetUserId: string): {
     } else {
       db.prepare(`
         UPDATE relationships
-        SET status = 'ACCEPTED_ONE_WAY', updated_at = ?
+        SET status = 'ACCEPTED_ONE_WAY', mutual_at = ?, updated_at = ?
         WHERE id = ?
-      `).run(now, reverseRel.id);
+      `).run(now, now, reverseRel.id);
       reverseRel.status = 'ACCEPTED_ONE_WAY';
       reverseRel.updated_at = now;
     }
+
+    // Also update original relationship mutual_at timestamp
+    db.prepare('UPDATE relationships SET mutual_at = ?, updated_at = ? WHERE id = ?').run(now, now, originalRel.id);
 
     // 3. Mutual detection & canonical insertion
     const [minId, maxId] = currentUserId < targetUserId ? [currentUserId, targetUserId] : [targetUserId, currentUserId];
@@ -309,7 +322,7 @@ export function disconnect(currentUserId: string, targetUserId: string): { mutua
     const now = new Date().toISOString();
 
     if (relOut) {
-      db.prepare("UPDATE relationships SET status = 'CANCELLED', updated_at = ? WHERE id = ?").run(now, relOut.id);
+      db.prepare("UPDATE relationships SET status = 'CANCELLED', disconnected_at = ?, updated_at = ? WHERE id = ?").run(now, now, relOut.id);
     }
 
     // 2. Remove from mutual_relationships if present

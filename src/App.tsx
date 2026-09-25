@@ -39,6 +39,14 @@ export const App: React.FC = () => {
                   }
                 />
                 <Route
+                  path="profile/:userId"
+                  element={
+                    <ProtectedRoute>
+                      <ProfilePage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
                   path="molecule"
                   element={
                     <ProtectedRoute>
@@ -46,6 +54,7 @@ export const App: React.FC = () => {
                     </ProtectedRoute>
                   }
                 />
+                <Route path="molecular-avatar" element={<Navigate to="/molecule" replace />} />
                 <Route
                   path="people"
                   element={

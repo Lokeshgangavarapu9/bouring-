@@ -1,12 +1,13 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Sparkles, ArrowRight, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { api } from '../services/api';
+import { Sparkles, ArrowRight, AlertCircle } from 'lucide-react';
 
 export const AuthPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { login, signup } = useAuth();
+  const { login, signup, isAuthenticated, loading: authLoading } = useAuth();
 
   const rawDest = (location.state as any)?.from?.pathname;
   const destination = rawDest === '/dashboard' ? '/profile' : rawDest || '/profile';
@@ -16,29 +17,42 @@ export const AuthPage: React.FC = () => {
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
   const [username, setUsername] = useState('');
-  const [authSuccess, setAuthSuccess] = useState(false);
-  const [launchedUrl, setLaunchedUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
 
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
 
-  const launchAuthenticatedApp = (targetPath: string) => {
-    const targetUrl = targetPath || '/profile';
-    try {
-      const newTab = window.open(targetUrl, '_blank');
-      if (newTab && !newTab.closed && typeof newTab.closed !== 'undefined') {
-        setAuthSuccess(true);
-        setLaunchedUrl(targetUrl);
-        try {
-          window.close();
-        } catch {}
-      } else {
-        navigate(targetUrl, { replace: true });
-      }
-    } catch {
-      navigate(targetUrl, { replace: true });
+  // Handle incoming OAuth redirect token or errors in URL query params
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('token');
+    const err = params.get('error');
+
+    if (token) {
+      localStorage.setItem('boring_auth_token', token);
+      window.history.replaceState({}, document.title, window.location.pathname);
+      window.location.href = destination;
+      return;
     }
-  };
+
+    if (err) {
+      window.history.replaceState({}, document.title, window.location.pathname);
+      if (err === 'google_not_configured') {
+        setErrors({
+          form: 'Google OAuth is not configured on this server. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in the server environment.',
+        });
+      } else {
+        setErrors({ form: `Google sign-in error: ${decodeURIComponent(err)}` });
+      }
+    }
+  }, [destination]);
+
+  // If the user is already authenticated, redirect them to their destination
+  useEffect(() => {
+    if (isAuthenticated && !authLoading) {
+      navigate(destination, { replace: true });
+    }
+  }, [isAuthenticated, authLoading, destination, navigate]);
 
   const validate = (): boolean => {
     const errs: { [key: string]: string } = {};
@@ -92,11 +106,30 @@ export const AuthPage: React.FC = () => {
       } else {
         await signup(name.trim(), username.trim(), email.trim(), password);
       }
-      launchAuthenticatedApp(destination);
+      navigate(destination, { replace: true });
     } catch (err: any) {
       setErrors({ form: err.message || 'Authentication failed. Please check credentials.' });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleGoogleLogin = async () => {
+    setGoogleLoading(true);
+    setErrors(prev => ({ ...prev, form: '' }));
+    try {
+      const config = await api.auth.getGoogleConfig();
+      if (!config.configured) {
+        setErrors({
+          form: 'Google OAuth is not configured on this server. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in the server environment.',
+        });
+        setGoogleLoading(false);
+        return;
+      }
+      window.location.href = '/api/auth/google';
+    } catch (err: any) {
+      setErrors({ form: err.message || 'Unable to connect to Google OAuth service.' });
+      setGoogleLoading(false);
     }
   };
 
@@ -105,55 +138,18 @@ export const AuthPage: React.FC = () => {
       {/* Ambient background glow */}
       <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-gradient-to-tr from-indigo-200/30 to-violet-200/20 rounded-full blur-[100px] pointer-events-none" />
 
-      {authSuccess ? (
-        <div className="w-full max-w-md space-y-7 relative z-10 text-center animate-in fade-in duration-200">
-          <div className="glass-panel rounded-3xl p-8 border border-slate-200/80 shadow-xl space-y-6">
-            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-tr from-emerald-500 to-indigo-600 text-white shadow-lg shadow-emerald-500/20">
-              <CheckCircle2 className="h-7 w-7" />
-            </div>
-            <div className="space-y-2">
-              <h2 className="text-2xl font-light tracking-tight text-slate-900">
-                Authenticated Successfully
-              </h2>
-              <p className="text-xs text-slate-500 max-w-xs mx-auto">
-                Your authenticated Boring application has opened in a new tab.
-              </p>
-            </div>
-
-            <div className="pt-2 flex flex-col gap-3">
-              <a
-                href={launchedUrl || '/profile'}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white shadow-md hover:bg-slate-800 transition-all cursor-pointer"
-              >
-                <span>Open Application (Profile) →</span>
-                <ArrowRight className="h-4 w-4" />
-              </a>
-
-              <button
-                type="button"
-                onClick={() => navigate(destination, { replace: true })}
-                className="text-xs text-slate-500 hover:text-slate-800 underline transition-colors cursor-pointer"
-              >
-                Or continue in this tab
-              </button>
-            </div>
+      <div className="w-full max-w-md space-y-7 relative z-10">
+        <div className="text-center">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-tr from-indigo-500 to-violet-500 text-white shadow-md shadow-indigo-500/20">
+            <Sparkles className="h-6 w-6" />
           </div>
+          <h2 className="mt-4 text-2xl font-light tracking-tight text-slate-900">
+            {mode === 'signin' ? 'Sign in to Boring' : 'Create your Boring account'}
+          </h2>
+          <p className="mt-1.5 text-xs text-slate-500">
+            Explore your social relationships as an interactive 3D molecular structure
+          </p>
         </div>
-      ) : (
-        <div className="w-full max-w-md space-y-7 relative z-10">
-          <div className="text-center">
-            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-tr from-indigo-500 to-violet-500 text-white shadow-md shadow-indigo-500/20">
-              <Sparkles className="h-6 w-6" />
-            </div>
-            <h2 className="mt-4 text-2xl font-light tracking-tight text-slate-900">
-              {mode === 'signin' ? 'Sign in to Boring' : 'Create your Boring account'}
-            </h2>
-            <p className="mt-1.5 text-xs text-slate-500">
-              Explore your social relationships as an interactive 3D molecular structure
-            </p>
-          </div>
 
         {/* Form Container */}
         <div className="glass-panel rounded-3xl p-6 sm:p-8 border border-slate-200/80 shadow-lg">
@@ -312,10 +308,47 @@ export const AuthPage: React.FC = () => {
               <span>{loading ? 'Authenticating...' : mode === 'signin' ? 'Sign In →' : 'Create Account →'}</span>
               <ArrowRight className="h-4 w-4" />
             </button>
+
+            {/* Modern Divider */}
+            <div className="relative my-4">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-slate-200"></div>
+              </div>
+              <div className="relative flex justify-center text-[11px] uppercase tracking-wider">
+                <span className="bg-white px-3 text-slate-400 font-medium">or</span>
+              </div>
+            </div>
+
+            {/* Continue with Google Button */}
+            <button
+              type="button"
+              onClick={handleGoogleLogin}
+              disabled={loading || googleLoading}
+              className="w-full inline-flex items-center justify-center gap-2.5 rounded-xl border border-slate-200/90 bg-white/90 px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-xs hover:bg-slate-50 hover:border-slate-300 transition-all cursor-pointer disabled:opacity-50"
+            >
+              <svg className="h-4 w-4 shrink-0" viewBox="0 0 24 24">
+                <path
+                  fill="#4285F4"
+                  d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"
+                />
+                <path
+                  fill="#34A853"
+                  d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24z"
+                />
+                <path
+                  fill="#FBBC05"
+                  d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 10.03 0 12s.45 3.82 1.25 5.42l4.03-3.15z"
+                />
+                <path
+                  fill="#EA4335"
+                  d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"
+                />
+              </svg>
+              <span>{googleLoading ? 'Connecting to Google...' : 'Continue with Google'}</span>
+            </button>
           </form>
         </div>
       </div>
-      )}
 
       {/* Subtle Floating Action Element on Login Page */}
       <div className="fixed bottom-6 right-6 sm:bottom-8 sm:right-8 z-40">

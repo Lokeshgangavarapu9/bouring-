@@ -35,17 +35,31 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     ...(options.headers || {}),
   };
 
-  const response = await fetch(`${API_BASE}${endpoint}`, {
-    ...options,
-    headers,
-  });
-
-  const data = await response.json();
-  if (!response.ok) {
-    throw new Error(data.error || 'API request failed');
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${endpoint}`, {
+      ...options,
+      headers,
+    });
+  } catch (err: any) {
+    throw new Error('Could not connect to Boring backend server. Please verify the backend is running on port 3001.');
   }
 
-  return data;
+  const text = await response.text();
+  let data: any = {};
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error(response.statusText || `Server returned error (${response.status})`);
+    }
+  }
+
+  if (!response.ok) {
+    throw new Error(data.error || data.message || `API request failed with status ${response.status}`);
+  }
+
+  return data as T;
 }
 
 export const api = {
@@ -77,6 +91,15 @@ export const api = {
       request<{ user: any }>('/auth/switch', {
         method: 'POST',
         body: JSON.stringify({ userId }),
+      }),
+
+    getGoogleConfig: () =>
+      request<{ configured: boolean; clientId: string | null }>('/auth/google/config'),
+
+    loginWithGoogle: (payload: { idToken?: string; code?: string; mockUserInfo?: any }) =>
+      request<{ user: any; token: string; isNewUser?: boolean }>('/auth/google', {
+        method: 'POST',
+        body: JSON.stringify(payload),
       }),
   },
 
@@ -150,6 +173,29 @@ export const api = {
       request<{ socialProfile: any }>('/profile/socials', {
         method: 'POST',
         body: JSON.stringify({ platform, profile_url, display_username }),
+      }),
+
+    updateSocial: (profileId: string, data: { profile_url: string; display_username?: string; platform?: string }) =>
+      request<{ socialProfile: any }>(`/profile/socials/${profileId}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }),
+
+    classifySocial: (url: string, display_username?: string, platform?: string) =>
+      request<{
+        valid: boolean;
+        error?: string;
+        rawUrl: string;
+        normalizedUrl: string;
+        canonicalUrl: string;
+        hostname: string;
+        platform: string;
+        platformDisplayName: string;
+        iconId: string;
+        displayHandle: string;
+      }>('/profile/socials/classify', {
+        method: 'POST',
+        body: JSON.stringify({ url, display_username, platform }),
       }),
 
     removeSocial: (profileId: string) =>

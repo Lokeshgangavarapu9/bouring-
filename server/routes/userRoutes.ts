@@ -4,9 +4,11 @@ import {
   updateProfile,
   updatePrivacySettings,
   addSocialProfile,
+  updateSocialProfile,
   removeSocialProfile,
   getPrivacySettings,
 } from '../services/profileService.ts';
+import { processSocialLink } from '../services/socialLinkService.ts';
 import { getUserById } from '../services/authService.ts';
 import { authMiddleware, optionalAuthMiddleware, AuthenticatedRequest } from '../middleware/authMiddleware.ts';
 
@@ -68,22 +70,59 @@ userRouter.put('/profile/privacy', authMiddleware, (req: AuthenticatedRequest, r
   }
 });
 
-// POST /api/profile/socials - Add a social profile link
-userRouter.post('/profile/socials', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+// POST /api/profile/socials/classify - Preview / classify a URL in real-time
+userRouter.post('/profile/socials/classify', async (req, res) => {
   try {
-    const { platform, profile_url, display_username } = req.body;
-    if (!platform || !profile_url || !display_username) {
-      return res.status(400).json({ error: 'Platform, profile_url, and display_username are required' });
-    }
-    const created = addSocialProfile(req.userId!, platform, profile_url, display_username);
-    res.status(201).json({ socialProfile: created });
+    const { url, display_username, platform } = req.body;
+    const result = await processSocialLink(url || '', display_username, platform);
+    res.json(result);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
 });
 
-// DELETE /api/profile/socials/:profileId - Remove a social profile link
-userRouter.delete('/profile/socials/:profileId', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+// POST /api/profile/socials & /api/profile/social - Add a social profile link
+const handleAddSocial = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { platform, profile_url, display_username, url } = req.body;
+    const targetUrl = profile_url || url;
+    if (!targetUrl) {
+      return res.status(400).json({ error: 'Profile URL is required' });
+    }
+    const created = await addSocialProfile(req.userId!, platform || '', targetUrl, display_username || '');
+    res.status(201).json({ socialProfile: created });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+};
+userRouter.post('/profile/socials', authMiddleware, handleAddSocial);
+userRouter.post('/profile/social', authMiddleware, handleAddSocial);
+
+// PUT /api/profile/socials/:profileId & /api/profile/social/:profileId - Update a social profile link
+const handleUpdateSocial = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { platform, profile_url, display_username, url } = req.body;
+    const targetUrl = profile_url || url;
+    if (!targetUrl) {
+      return res.status(400).json({ error: 'Profile URL is required' });
+    }
+    const updated = await updateSocialProfile(
+      req.userId!,
+      req.params.profileId,
+      targetUrl,
+      display_username,
+      platform
+    );
+    res.json({ socialProfile: updated });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+};
+userRouter.put('/profile/socials/:profileId', authMiddleware, handleUpdateSocial);
+userRouter.put('/profile/social/:profileId', authMiddleware, handleUpdateSocial);
+
+// DELETE /api/profile/socials/:profileId & /api/profile/social/:profileId - Remove a social profile link
+const handleDeleteSocial = (req: AuthenticatedRequest, res: Response) => {
   try {
     const success = removeSocialProfile(req.userId!, req.params.profileId);
     if (!success) {
@@ -93,4 +132,6 @@ userRouter.delete('/profile/socials/:profileId', authMiddleware, (req: Authentic
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
-});
+};
+userRouter.delete('/profile/socials/:profileId', authMiddleware, handleDeleteSocial);
+userRouter.delete('/profile/social/:profileId', authMiddleware, handleDeleteSocial);

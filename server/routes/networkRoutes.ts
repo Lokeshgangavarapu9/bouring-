@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import { getOrComputeLayout } from '../services/layoutService.ts';
+import { getOrComputeLayoutAsync } from '../services/layoutService.ts';
 import { buildEgoGraph } from '../services/graphAnalysisService.ts';
 import { classifyStructure } from '../services/structureClassificationService.ts';
 import { getMutualPartnerIds, getUserRelationships } from '../services/relationshipService.ts';
@@ -72,12 +72,37 @@ networkRouter.get('/:userId', optionalAuthMiddleware, (req: AuthenticatedRequest
 });
 
 // GET /api/network/:userId/layout - Deterministic 3D layout computation & caching
-networkRouter.get('/:userId/layout', optionalAuthMiddleware, (req: AuthenticatedRequest, res: Response) => {
+networkRouter.get('/:userId/layout', optionalAuthMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.params.userId;
-    const layout = getOrComputeLayout(userId);
+    const layout = await getOrComputeLayoutAsync(userId);
     res.json(layout);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
+
+// GET /api/network/:userId/snapshot - Canonical graph snapshot
+networkRouter.get('/:userId/snapshot', optionalAuthMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.params.userId;
+    const { createGraphSnapshot } = await import('../services/graphPipelineService.ts');
+    const snapshot = createGraphSnapshot(userId);
+    res.json(snapshot);
+  } catch (err: any) {
+    res.status(404).json({ error: err.message });
+  }
+});
+
+// GET /api/network/:userId/summary - PII-free AI-safe summary
+networkRouter.get('/:userId/summary', optionalAuthMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.params.userId;
+    const { createAiSafeGraphSummary } = await import('../services/graphPipelineService.ts');
+    const summary = createAiSafeGraphSummary(userId);
+    res.json(summary);
+  } catch (err: any) {
+    res.status(404).json({ error: err.message });
+  }
+});
+

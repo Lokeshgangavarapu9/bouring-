@@ -11,6 +11,7 @@ export const DEFAULT_PRIVACY: PrivacySettings = {
 interface AuthContextType {
   currentUser: User | null;
   isAuthenticated: boolean;
+  loading: boolean;
   login: (email: string, password?: string) => Promise<boolean>;
   signup: (name: string, username: string, email: string, password?: string) => Promise<boolean>;
   logout: () => void;
@@ -22,7 +23,23 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [currentUser, setCurrentUser] = useState<User | null>(() => {
+    const token = localStorage.getItem('boring_auth_token');
+    const saved = localStorage.getItem('molecule_current_user');
+    if (token && saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  });
+
+  const [loading, setLoading] = useState<boolean>(() => {
+    // If token exists, we are verifying session on mount
+    return !!localStorage.getItem('boring_auth_token');
+  });
 
   // Validate session against authoritative backend on mount
   useEffect(() => {
@@ -30,24 +47,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const token = localStorage.getItem('boring_auth_token');
     if (!token) {
       setCurrentUser(null);
+      setLoading(false);
       return;
     }
 
     const syncUser = async () => {
       try {
         const res = await api.auth.getMe();
-        if (isMounted && res.user) {
-          setCurrentUser(res.user);
-        } else if (isMounted) {
-          localStorage.removeItem('boring_auth_token');
-          localStorage.removeItem('molecule_current_user');
-          setCurrentUser(null);
+        if (isMounted) {
+          if (res.user) {
+            setCurrentUser(res.user);
+          } else {
+            localStorage.removeItem('boring_auth_token');
+            localStorage.removeItem('molecule_current_user');
+            setCurrentUser(null);
+          }
         }
       } catch {
         if (isMounted) {
           localStorage.removeItem('boring_auth_token');
           localStorage.removeItem('molecule_current_user');
           setCurrentUser(null);
+        }
+      } finally {
+        if (isMounted) {
+          setLoading(false);
         }
       }
     };
@@ -150,6 +174,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       value={{
         currentUser,
         isAuthenticated: !!currentUser,
+        loading,
         login,
         signup,
         logout,

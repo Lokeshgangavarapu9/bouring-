@@ -1,16 +1,22 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import * as THREE from 'three';
 import { GraphBond3D } from '../../types';
 
 interface MolecularBondProps {
   bond: GraphBond3D;
   isHighlighted: boolean;
+  currentUserId?: string;
+  onSelect?: (targetUserId: string) => void;
 }
 
 export const MolecularBond: React.FC<MolecularBondProps> = ({
   bond,
   isHighlighted,
+  currentUserId,
+  onSelect,
 }) => {
+  const [hovered, setHovered] = useState(false);
+
   const { position, quaternion, length } = useMemo(() => {
     const vSource = new THREE.Vector3(...bond.sourcePos);
     const vTarget = new THREE.Vector3(...bond.targetPos);
@@ -33,17 +39,38 @@ export const MolecularBond: React.FC<MolecularBondProps> = ({
     };
   }, [bond.sourcePos, bond.targetPos]);
 
-  // Bonds are neutral and elegant — they represent accepted connections.
-  // They do NOT inherit any user's molecule identity color.
-  const bondColor = isHighlighted ? '#A5B4FC' : '#64748B';
-  const emissiveColor = isHighlighted ? '#6366F1' : '#38BDF8';
-  const emissiveIntensity = isHighlighted ? 0.8 : 0.25;
-  const radius = isHighlighted ? 0.042 : 0.026;
-  const opacity = isHighlighted ? 0.9 : 0.55;
+  // Bonds are neutral and elegant — they represent accepted mutual connections.
+  const activeHighlight = isHighlighted || hovered;
+  const bondColor = activeHighlight ? '#A5B4FC' : '#64748B';
+  const emissiveColor = activeHighlight ? '#6366F1' : '#38BDF8';
+  const emissiveIntensity = activeHighlight ? 0.85 : 0.25;
+  const radius = activeHighlight ? 0.046 : 0.026;
+  const opacity = activeHighlight ? 0.95 : 0.55;
+
+  const handleClick = (e: any) => {
+    e.stopPropagation();
+    if (!onSelect) return;
+    // Identify the friend connected by this bond
+    const friendId = currentUserId === bond.sourceId ? bond.targetId : bond.sourceId;
+    onSelect(friendId);
+  };
 
   return (
-    <mesh position={position} quaternion={quaternion}>
-      <cylinderGeometry args={[radius, radius, length, 12]} />
+    <mesh
+      position={position}
+      quaternion={quaternion}
+      onClick={handleClick}
+      onPointerOver={(e) => {
+        e.stopPropagation();
+        setHovered(true);
+        document.body.style.cursor = 'pointer';
+      }}
+      onPointerOut={() => {
+        setHovered(false);
+        document.body.style.cursor = 'auto';
+      }}
+    >
+      <cylinderGeometry args={[radius, radius, length, 16]} />
       <meshStandardMaterial
         color={bondColor}
         emissive={emissiveColor}

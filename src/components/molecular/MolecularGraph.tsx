@@ -170,7 +170,7 @@ export const MolecularGraph = forwardRef<MolecularGraphHandle, MolecularGraphPro
             id: n.id,
             user: {
               ...n.user,
-              moleculeIdentity: n.user.moleculeIdentity || 'default',
+              moleculeIdentity: (n.id === currentUser.id ? currentUser.moleculeIdentity : n.user.moleculeIdentity) || 'default',
             },
             position: n.position,
             size: n.size || (n.isHost ? 1.15 : 0.82),
@@ -200,7 +200,26 @@ export const MolecularGraph = forwardRef<MolecularGraphHandle, MolecularGraphPro
     return () => {
       isMounted = false;
     };
-  }, [currentUser, connections]);
+  }, [currentUser, currentUser?.moleculeIdentity, connections]);
+
+  // Subtle circular grounding light texture on floor
+  const groundGlowTexture = useMemo(() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 256;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      const grad = ctx.createRadialGradient(128, 128, 0, 128, 128, 128);
+      grad.addColorStop(0, 'rgba(129, 140, 248, 0.4)');
+      grad.addColorStop(0.35, 'rgba(99, 102, 241, 0.2)');
+      grad.addColorStop(0.7, 'rgba(30, 27, 75, 0.06)');
+      grad.addColorStop(1, 'rgba(6, 8, 16, 0)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, 256, 256);
+    }
+    const texture = new THREE.CanvasTexture(canvas);
+    return texture;
+  }, []);
 
   // Compute 3D positions with backend layout if available, falling back to client layout
   const { nodes, bonds } = useMemo(() => {
@@ -257,6 +276,12 @@ export const MolecularGraph = forwardRef<MolecularGraphHandle, MolecularGraphPro
     <div
       className="relative w-full h-full overflow-hidden bg-[#060810]"
       style={{ height }}
+      onTouchMove={(e) => {
+        // Strictly disable two-finger pinch zoom touch gesture at container level
+        if (e.touches && e.touches.length > 1) {
+          e.preventDefault();
+        }
+      }}
     >
       {/* Neutral Deep Space Background Ambient Glow */}
       <div
@@ -285,7 +310,27 @@ export const MolecularGraph = forwardRef<MolecularGraphHandle, MolecularGraphPro
         <directionalLight position={[-12, -8, -10]} intensity={0.65} color="#818CF8" />
         <pointLight position={[0, 0, 0]} intensity={0.35} color="#38BDF8" />
 
-        {/* Smooth Orbit Controls with generous zoom range */}
+        {/* Subtle Grounding Light & Diffuse Radial Glow underneath the molecular network */}
+        <mesh position={[0, -5.2, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+          <circleGeometry args={[12, 64]} />
+          <meshBasicMaterial
+            map={groundGlowTexture}
+            transparent={true}
+            opacity={0.4}
+            depthWrite={false}
+          />
+        </mesh>
+
+        {/* Downward soft diffuse illumination onto center floor */}
+        <spotLight
+          position={[0, 14, 0]}
+          angle={0.8}
+          penumbra={1}
+          intensity={1.1}
+          color="#C7D2FE"
+        />
+
+        {/* Smooth Orbit Controls with 360° rotation and pinch-zoom disabled */}
         <OrbitControls
           ref={controlsRef}
           enableDamping={true}
@@ -294,6 +339,10 @@ export const MolecularGraph = forwardRef<MolecularGraphHandle, MolecularGraphPro
           zoomSpeed={0.9}
           minDistance={1.8}
           maxDistance={85}
+          touches={{
+            ONE: THREE.TOUCH.ROTATE,
+            TWO: THREE.TOUCH.PAN,
+          }}
         />
 
         {/* Auto Camera Manager: frames network on load & triggers animated transitions */}
@@ -304,7 +353,7 @@ export const MolecularGraph = forwardRef<MolecularGraphHandle, MolecularGraphPro
           triggerReset={triggerReset}
         />
 
-        {/* 3D Bonds (Connecting only accepted mutual relationships) */}
+        {/* 3D Bonds (Connecting only accepted mutual relationships, clickable) */}
         {bonds.map(bond => {
           const isHighlighted =
             selectedNodeId !== null &&
@@ -314,6 +363,8 @@ export const MolecularGraph = forwardRef<MolecularGraphHandle, MolecularGraphPro
               key={bond.id}
               bond={bond}
               isHighlighted={isHighlighted}
+              currentUserId={currentUser?.id}
+              onSelect={onSelectNode}
             />
           );
         })}

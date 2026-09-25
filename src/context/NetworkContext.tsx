@@ -31,6 +31,7 @@ interface NetworkContextType {
   canConnectBack: (targetUserId: string) => boolean;
   getUserSocialProfiles: (userId: string) => SocialProfile[];
   addSocialProfile: (platform: SocialProfile['platform'], profile_url: string, display_username: string) => Promise<void>;
+  updateSocialProfile: (profileId: string, profile_url: string, display_username?: string, platform?: string) => Promise<void>;
   removeSocialProfile: (profileId: string) => Promise<void>;
   refreshNetworkData: () => Promise<void>;
 }
@@ -94,6 +95,14 @@ export const NetworkProvider: React.FC<{ children: React.ReactNode }> = ({ child
       if (statsRes.stats) {
         setNetworkStats(statsRes.stats);
       }
+
+      // 4. Fetch Current User Social Profiles from backend
+      try {
+        const profileRes = await api.profile.getSocialProfile(currentUser.id);
+        if (profileRes.socialProfiles) {
+          setSocialProfiles(profileRes.socialProfiles);
+        }
+      } catch {}
 
       setError(null);
     } catch (err: any) {
@@ -225,6 +234,22 @@ export const NetworkProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   };
 
+  const updateSocialProfile = async (
+    profileId: string,
+    profile_url: string,
+    display_username?: string,
+    platform?: string
+  ) => {
+    try {
+      const res = await api.profile.updateSocial(profileId, { profile_url, display_username, platform });
+      if (res.socialProfile) {
+        setSocialProfiles(prev => prev.map(p => (p.id === profileId ? res.socialProfile : p)));
+      }
+    } catch (err: any) {
+      throw new Error(err.message || 'Failed to update social profile');
+    }
+  };
+
   const removeSocialProfile = async (profileId: string) => {
     try {
       await api.profile.removeSocial(profileId);
@@ -258,6 +283,7 @@ export const NetworkProvider: React.FC<{ children: React.ReactNode }> = ({ child
         canConnectBack,
         getUserSocialProfiles,
         addSocialProfile,
+        updateSocialProfile,
         removeSocialProfile,
         refreshNetworkData,
       }}

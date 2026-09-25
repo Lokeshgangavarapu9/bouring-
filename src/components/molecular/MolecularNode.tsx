@@ -3,6 +3,7 @@ import { useFrame } from '@react-three/fiber';
 import { Text } from '@react-three/drei';
 import * as THREE from 'three';
 import { GraphNode3D } from '../../types';
+import { useAuth } from '../../context/AuthContext';
 import { getMoleculeIdentity } from '../molecule/moleculeIdentities';
 import { MoleculeVisualMotif3D } from '../molecule/MoleculeVisualMotif3D';
 
@@ -21,6 +22,7 @@ export const MolecularNode: React.FC<MolecularNodeProps> = ({
   isSelf,
   onSelect,
 }) => {
+  const { currentUser } = useAuth();
   const meshRef = useRef<THREE.Mesh>(null);
   const groupRef = useRef<THREE.Group>(null);
   const hostRingRef = useRef<THREE.Mesh>(null);
@@ -29,8 +31,11 @@ export const MolecularNode: React.FC<MolecularNodeProps> = ({
   // Floating oscillation offset unique per node
   const seed = useRef(Math.random() * 100);
 
-  // Retrieve this individual user's personal molecule identity
-  const identity = getMoleculeIdentity(node.user.moleculeIdentity);
+  // Retrieve this individual user's personal molecule identity (self node always consumes authoritative currentUser identity)
+  const activeIdentityId = isSelf
+    ? (currentUser?.moleculeIdentity || node.user.moleculeIdentity)
+    : node.user.moleculeIdentity;
+  const identity = getMoleculeIdentity(activeIdentityId);
   const nodeStyle = identity.node;
 
   useFrame((state) => {
@@ -104,8 +109,6 @@ export const MolecularNode: React.FC<MolecularNodeProps> = ({
       <MoleculeVisualMotif3D
         identity={identity}
         isSelf={isSelf}
-        smoky={node.user.moleculeSmoky}
-        twinkling={node.user.moleculeTwinkling}
       />
 
       {/* Outer translucent pearl/glass sphere with user's personal skin */}

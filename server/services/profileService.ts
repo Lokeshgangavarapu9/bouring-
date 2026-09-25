@@ -1,6 +1,7 @@
 import { db, transaction } from '../db/database.ts';
 import { isMutual } from './relationshipService.ts';
 import { getUserById, SanitizedUser } from './authService.ts';
+import { processSocialLink } from './socialLinkService.ts';
 
 export interface PrivacySettingsRow {
   user_id: string;
@@ -15,6 +16,9 @@ export interface SocialProfileRow {
   platform: string;
   profile_url: string;
   display_username: string;
+  normalized_url?: string;
+  hostname?: string;
+  icon_id?: string;
   created_at: string;
 }
 
@@ -41,7 +45,7 @@ export function getPrivacySettings(userId: string): PrivacySettingsRow {
 
 export function getUserSocialProfiles(userId: string): SocialProfileRow[] {
   const stmt = db.prepare('SELECT * FROM social_profiles WHERE user_id = ? ORDER BY created_at ASC');
-  return stmt.all(userId) as SocialProfileRow[];
+  return stmt.all(userId) as unknown as SocialProfileRow[];
 }
 
 /**
@@ -146,8 +150,51 @@ export function updateProfile(
     `);
     stmt.run(name, bio, gender, avatar_url, molecule_identity, molecule_smoky, molecule_twinkling, showcase, now, userId);
 
+    // Synchronize dedicated user_molecule_identities record
+    db.prepare(`
+      INSERT INTO user_molecule_identities (user_id, identity_type, model_version, parameters, created_at, updated_at)
+      VALUES (?, ?, 'v1', ?, ?, ?)
+      ON CONFLICT(user_id) DO UPDATE SET
+        identity_type = excluded.identity_type,
+        parameters = excluded.parameters,
+        updated_at = excluded.updated_at
+    `).run(
+      userId,
+      molecule_identity,
+      JSON.stringify({ smoky: Boolean(molecule_smoky), twinkling: Boolean(molecule_twinkling) }),
+      now,
+      now
+    );
+
+    // Invalidate layout cache for this user so updated profile and molecule identity immediately propagate
+    db.prepare('DELETE FROM layout_cache WHERE host_user_id = ?').run(userId);
+
     return getUserById(userId)!;
   });
+}
+
+export function getUserMoleculeIdentity(userId: string) {
+  const stmt = db.prepare('SELECT * FROM user_molecule_identities WHERE user_id = ?');
+  const row = stmt.get(userId) as any;
+  if (row) {
+    return {
+      userId: row.user_id,
+      identityType: row.identity_type,
+      modelVersion: row.model_version,
+      parameters: JSON.parse(row.parameters || '{}'),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+  const user = getUserById(userId);
+  return {
+    userId,
+    identityType: user?.moleculeIdentity || 'default',
+    modelVersion: 'v1',
+    parameters: { smoky: user?.moleculeSmoky || false, twinkling: user?.moleculeTwinkling || false },
+    createdAt: user?.created_at || new Date().toISOString(),
+    updatedAt: user?.created_at || new Date().toISOString(),
+  };
 }
 
 export function updatePrivacySettings(
@@ -173,21 +220,118 @@ export function updatePrivacySettings(
   });
 }
 
-export function addSocialProfile(
+export async function addSocialProfile(
   userId: string,
   platform: string,
   profileUrl: string,
   displayUsername: string
-): SocialProfileRow {
+): Promise<SocialProfileRow> {
+  const processed = await processSocialLink(profileUrl, displayUsername, platform);
+  if (!processed.valid) {
+    throw new Error(processed.error || 'Invalid social profile URL');
+  }
+
+  // Prevent duplicate social profiles for the same user
+  const duplicate = db.prepare(`
+    SELECT id FROM social_profiles
+    WHERE user_id = ? AND (normalized_url = ? OR profile_url = ?)
+  `).get(userId, processed.normalizedUrl, processed.normalizedUrl);
+
+  if (duplicate) {
+    throw new Error('This social profile link is already connected to your account');
+  }
+
   const id = `sp-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
   const now = new Date().toISOString();
 
   db.prepare(`
-    INSERT INTO social_profiles (id, user_id, platform, profile_url, display_username, created_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(id, userId, platform, profileUrl, displayUsername, now);
+    INSERT INTO social_profiles (
+      id, user_id, platform, profile_url, display_username,
+      normalized_url, hostname, icon_id, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    userId,
+    processed.platform,
+    processed.canonicalUrl,
+    processed.displayHandle,
+    processed.normalizedUrl,
+    processed.hostname,
+    processed.iconId,
+    now
+  );
 
-  return { id, user_id: userId, platform, profile_url: profileUrl, display_username: displayUsername, created_at: now };
+  return {
+    id,
+    user_id: userId,
+    platform: processed.platform,
+    profile_url: processed.canonicalUrl,
+    display_username: processed.displayHandle,
+    normalized_url: processed.normalizedUrl,
+    hostname: processed.hostname,
+    icon_id: processed.iconId,
+    created_at: now,
+  };
+}
+
+export async function updateSocialProfile(
+  userId: string,
+  profileId: string,
+  profileUrl: string,
+  displayUsername?: string,
+  platform?: string
+): Promise<SocialProfileRow> {
+  const existing = db.prepare('SELECT * FROM social_profiles WHERE id = ? AND user_id = ?').get(profileId, userId) as SocialProfileRow | undefined;
+  if (!existing) {
+    throw new Error('Social profile not found');
+  }
+
+  const processed = await processSocialLink(
+    profileUrl,
+    displayUsername !== undefined ? displayUsername : existing.display_username,
+    platform
+  );
+  if (!processed.valid) {
+    throw new Error(processed.error || 'Invalid social profile URL');
+  }
+
+  // Prevent duplicate social profiles for the same user on different IDs
+  const duplicate = db.prepare(`
+    SELECT id FROM social_profiles
+    WHERE user_id = ? AND id != ? AND (normalized_url = ? OR profile_url = ?)
+  `).get(userId, profileId, processed.normalizedUrl, processed.normalizedUrl);
+
+  if (duplicate) {
+    throw new Error('Another social profile with this URL is already connected to your account');
+  }
+
+  db.prepare(`
+    UPDATE social_profiles
+    SET platform = ?, profile_url = ?, display_username = ?,
+        normalized_url = ?, hostname = ?, icon_id = ?
+    WHERE id = ? AND user_id = ?
+  `).run(
+    processed.platform,
+    processed.canonicalUrl,
+    processed.displayHandle,
+    processed.normalizedUrl,
+    processed.hostname,
+    processed.iconId,
+    profileId,
+    userId
+  );
+
+  return {
+    id: profileId,
+    user_id: userId,
+    platform: processed.platform,
+    profile_url: processed.canonicalUrl,
+    display_username: processed.displayHandle,
+    normalized_url: processed.normalizedUrl,
+    hostname: processed.hostname,
+    icon_id: processed.iconId,
+    created_at: existing.created_at,
+  };
 }
 
 export function removeSocialProfile(userId: string, profileId: string): boolean {

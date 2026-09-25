@@ -20,6 +20,7 @@ import {
   Users as UsersIcon
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { UserAvatar } from '../components/common/UserAvatar';
 
 export const PeoplePage: React.FC = () => {
   const { currentUser } = useAuth();
@@ -131,10 +132,11 @@ export const PeoplePage: React.FC = () => {
                     className="focus:outline-none focus:ring-2 focus:ring-indigo-500 rounded-full cursor-pointer"
                     title="Preview Profile"
                   >
-                    <img
-                      src={user.avatar_url}
-                      alt={user.name}
-                      className="h-14 w-14 rounded-full object-cover ring-2 ring-indigo-100 hover:ring-indigo-300 transition-all"
+                    <UserAvatar
+                      avatarUrl={user.avatar_url}
+                      name={user.name}
+                      size="lg"
+                      className="ring-2 ring-indigo-100 hover:ring-indigo-300 transition-all"
                     />
                   </button>
 
@@ -267,10 +269,11 @@ export const PeoplePage: React.FC = () => {
 
             {/* Profile Info */}
             <div className="flex items-center gap-4">
-              <img
-                src={previewUser.avatar_url}
-                alt={previewUser.name}
-                className="h-16 w-16 rounded-full object-cover ring-4 ring-indigo-50 shrink-0"
+              <UserAvatar
+                avatarUrl={previewUser.avatar_url}
+                name={previewUser.name}
+                size="lg"
+                className="ring-4 ring-indigo-50 shrink-0"
               />
               <div>
                 <div className="flex items-center gap-2">

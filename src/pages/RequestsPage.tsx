@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useNetwork } from '../context/NetworkContext';
 import { UserCheck, X, Clock, UserPlus, Inbox, Send, ArrowRight, Sparkles } from 'lucide-react';
+import { UserAvatar } from '../components/common/UserAvatar';
 
 export const RequestsPage: React.FC = () => {
   const { currentUser } = useAuth();
@@ -115,10 +116,11 @@ export const RequestsPage: React.FC = () => {
                     className="glass-card rounded-2xl p-5 border-2 border-indigo-200 bg-indigo-50/40 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all hover:shadow-md"
                   >
                     <div className="flex items-center gap-3.5">
-                      <img
-                        src={sender.avatar_url}
-                        alt={sender.name}
-                        className="h-12 w-12 rounded-full object-cover ring-2 ring-indigo-300 shrink-0"
+                      <UserAvatar
+                        avatarUrl={sender.avatar_url}
+                        name={sender.name}
+                        size="md"
+                        className="ring-2 ring-indigo-300 shrink-0"
                       />
                       <div>
                         <div className="flex items-center gap-2">
@@ -182,10 +184,11 @@ export const RequestsPage: React.FC = () => {
                     className="glass-card rounded-2xl p-5 border border-slate-200/80 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all hover:shadow-md"
                   >
                     <div className="flex items-center gap-3.5">
-                      <img
-                        src={sender.avatar_url}
-                        alt={sender.name}
-                        className="h-12 w-12 rounded-full object-cover ring-2 ring-indigo-100 shrink-0"
+                      <UserAvatar
+                        avatarUrl={sender.avatar_url}
+                        name={sender.name}
+                        size="md"
+                        className="ring-2 ring-indigo-100 shrink-0"
                       />
                       <div>
                         <h4 className="text-sm font-semibold text-slate-900">{sender.name}</h4>
@@ -259,10 +262,11 @@ export const RequestsPage: React.FC = () => {
                   className="glass-card rounded-2xl p-5 border border-slate-200/80 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4"
                 >
                   <div className="flex items-center gap-3.5">
-                    <img
-                      src={recipient.avatar_url}
-                      alt={recipient.name}
-                      className="h-12 w-12 rounded-full object-cover ring-2 ring-slate-100 shrink-0"
+                    <UserAvatar
+                      avatarUrl={recipient.avatar_url}
+                      name={recipient.name}
+                      size="md"
+                      className="ring-2 ring-slate-100 shrink-0"
                     />
                     <div>
                       <h4 className="text-sm font-semibold text-slate-900">{recipient.name}</h4>

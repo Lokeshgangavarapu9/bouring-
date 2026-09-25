@@ -8,11 +8,9 @@ import { MoleculeVisualMotif3D } from './MoleculeVisualMotif3D';
 
 interface MoleculeObjectProps {
   identity: MoleculeIdentityConfig;
-  smoky?: boolean;
-  twinkling?: boolean;
 }
 
-const MoleculeObject: React.FC<MoleculeObjectProps> = ({ identity, smoky, twinkling }) => {
+const MoleculeObject: React.FC<MoleculeObjectProps> = ({ identity }) => {
   const groupRef = useRef<THREE.Group>(null);
   const hostRingRef = useRef<THREE.Mesh>(null);
   const nodeStyle = identity.node;
@@ -56,8 +54,8 @@ const MoleculeObject: React.FC<MoleculeObjectProps> = ({ identity, smoky, twinkl
               <meshPhysicalMaterial
                 color="#CBD5E1"
                 emissive="#A5B4FC"
-                emissiveIntensity={0.3}
-                roughness={0.15}
+                emissiveIntensity={0.35}
+                roughness={0.12}
                 metalness={0.1}
                 transmission={0.7}
                 transparent={true}
@@ -67,7 +65,7 @@ const MoleculeObject: React.FC<MoleculeObjectProps> = ({ identity, smoky, twinkl
           );
         })}
 
-        {/* Crystal Spheres (Landing Page Signature Structure) */}
+        {/* Crystal Spheres (Signature Structure) */}
         {[
           { id: '1', pos: [0, 0, 0] as [number, number, number], color: '#818CF8', emissive: '#4F46E5', size: 0.52 },
           { id: '2', pos: [-1.4, 0.85, 0.4] as [number, number, number], color: '#A78BFA', emissive: '#7C3AED', size: 0.38 },
@@ -82,15 +80,15 @@ const MoleculeObject: React.FC<MoleculeObjectProps> = ({ identity, smoky, twinkl
               <meshPhysicalMaterial
                 color={node.color}
                 emissive={node.emissive}
-                emissiveIntensity={0.25}
-                roughness={0.1}
+                emissiveIntensity={0.28}
+                roughness={0.08}
                 metalness={0.08}
-                transmission={0.8}
+                transmission={0.82}
                 thickness={1.6}
                 transparent={true}
                 opacity={0.9}
                 clearcoat={1}
-                clearcoatRoughness={0.08}
+                clearcoatRoughness={0.06}
               />
             </mesh>
             <mesh>
@@ -110,7 +108,7 @@ const MoleculeObject: React.FC<MoleculeObjectProps> = ({ identity, smoky, twinkl
 
   return (
     <group ref={groupRef} scale={[2.2, 2.2, 2.2]}>
-      {/* Dedicated Host Halo Ring */}
+      {/* Orbital Ring */}
       <mesh ref={hostRingRef} rotation={[Math.PI / 3, 0, 0]}>
         <ringGeometry args={[0.76, 0.82, 64]} />
         <meshBasicMaterial
@@ -121,12 +119,10 @@ const MoleculeObject: React.FC<MoleculeObjectProps> = ({ identity, smoky, twinkl
         />
       </mesh>
 
-      {/* Procedural 3D Visual Motif specific to this identity with optional Smoky & Twinkling */}
+      {/* Procedural 3D Visual Motif specific to this identity */}
       <MoleculeVisualMotif3D
         identity={identity}
         isSelf={true}
-        smoky={smoky}
-        twinkling={twinkling}
       />
 
       {/* Outer translucent pearl/glass sphere with realistic physical sheen */}
@@ -150,7 +146,7 @@ const MoleculeObject: React.FC<MoleculeObjectProps> = ({ identity, smoky, twinkl
         />
       </mesh>
 
-      {/* Inner luminescent nucleus / smoky core */}
+      {/* Inner luminescent nucleus */}
       <mesh>
         <sphereGeometry args={[0.22, 24, 24]} />
         <meshStandardMaterial
@@ -166,17 +162,13 @@ const MoleculeObject: React.FC<MoleculeObjectProps> = ({ identity, smoky, twinkl
 
 interface SingleMoleculePreviewProps {
   identity: MoleculeIdentityConfig;
-  smoky?: boolean;
-  twinkling?: boolean;
 }
 
 export const SingleMoleculePreview: React.FC<SingleMoleculePreviewProps> = ({
   identity,
-  smoky = false,
-  twinkling = false,
 }) => {
   return (
-    <div className="relative w-full h-full min-h-[300px] sm:min-h-[380px] bg-[#060810] rounded-3xl overflow-hidden border border-slate-800/80 shadow-2xl flex items-center justify-center">
+    <div className="relative w-full h-full min-h-[380px] bg-[#060810] rounded-3xl overflow-hidden border border-slate-800/80 shadow-2xl flex items-center justify-center">
       {/* Background Radial Glow */}
       <div
         className="absolute inset-0 pointer-events-none transition-all duration-700 opacity-60"
@@ -186,18 +178,14 @@ export const SingleMoleculePreview: React.FC<SingleMoleculePreviewProps> = ({
       />
 
       <Canvas camera={{ position: [0, 0, 5.5], fov: 42 }} dpr={[1, 2]}>
-        <ambientLight intensity={0.6} color="#CBD5E1" />
+        <ambientLight intensity={0.65} color="#CBD5E1" />
         <directionalLight position={[6, 8, 5]} intensity={1.5} color="#FFFFFF" />
         <directionalLight position={[-6, -4, -5]} intensity={0.7} color={identity.node.glowColor} />
         <pointLight position={[0, 0, 0]} intensity={0.5} color={identity.node.emissiveColor} />
 
         <SpaceParticles count={250} color={identity.node.glowColor} opacity={0.35} />
 
-        <MoleculeObject
-          identity={identity}
-          smoky={smoky}
-          twinkling={twinkling}
-        />
+        <MoleculeObject identity={identity} />
 
         <OrbitControls
           enableZoom={false}
@@ -220,7 +208,7 @@ export const SingleMoleculePreview: React.FC<SingleMoleculePreviewProps> = ({
       </div>
 
       <div className="absolute bottom-4 right-4 z-10 pointer-events-none hidden sm:block text-[11px] text-slate-500 bg-slate-950/60 px-2.5 py-1 rounded-full backdrop-blur-xs">
-        Drag to inspect
+        360° Drag to inspect
       </div>
     </div>
   );

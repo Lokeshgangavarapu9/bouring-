@@ -13,6 +13,7 @@ import {
   X,
   Inbox
 } from 'lucide-react';
+import { UserAvatar } from '../common/UserAvatar';
 
 export const Navbar: React.FC = () => {
   const location = useLocation();
@@ -104,10 +105,10 @@ export const Navbar: React.FC = () => {
                   }`}
                   title="Profile"
                 >
-                  <img
-                    src={currentUser.avatar_url}
-                    alt={currentUser.name}
-                    className="h-8 w-8 rounded-full object-cover"
+                  <UserAvatar
+                    avatarUrl={currentUser.avatar_url}
+                    name={currentUser.name}
+                    size="sm"
                   />
                 </Link>
 
@@ -156,10 +157,11 @@ export const Navbar: React.FC = () => {
             {/* Header info */}
             <div className="flex items-center justify-between pb-3 mb-2 border-b border-slate-100 px-2">
               <div className="flex items-center gap-2.5 truncate">
-                <img
-                  src={currentUser.avatar_url}
-                  alt={currentUser.name}
-                  className="h-8 w-8 rounded-full object-cover ring-1 ring-slate-200 shrink-0"
+                <UserAvatar
+                  avatarUrl={currentUser.avatar_url}
+                  name={currentUser.name}
+                  size="sm"
+                  className="ring-1 ring-slate-200 shrink-0"
                 />
                 <div className="truncate">
                   <p className="text-xs font-semibold text-slate-900 truncate leading-tight">

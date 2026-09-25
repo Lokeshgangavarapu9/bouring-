@@ -1,0 +1,12 @@
+{
+  "include": [
+    "agent"
+  ],
+  "exclude": [
+    "**/node_modules",
+    "**/__pycache__",
+    "agent/notebooks"
+  ],
+  "reportMissingImports": "none",
+  "reportMissingTypeStubs": "none"
+}

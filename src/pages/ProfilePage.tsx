@@ -1,8 +1,10 @@
-import React, { useState, useRef } from 'react';
-import { Link } from 'react-router-dom';
+import React, { useState, useRef, useEffect } from 'react';
+import { Link, useSearchParams, useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useNetwork } from '../context/NetworkContext';
 import { SocialProfile } from '../types';
+import { api } from '../services/api';
+import { getMoleculeIdentity } from '../components/molecule/moleculeIdentities';
 import { 
   Globe, 
   Github, 
@@ -18,9 +20,11 @@ import {
   Camera,
   Trash2,
   Sparkles,
-  ExternalLink,
-  Lock
+  Lock,
+  ArrowLeft,
+  Loader2
 } from 'lucide-react';
+import { UserAvatar } from '../components/common/UserAvatar';
 
 export const ProfilePage: React.FC = () => {
   const { currentUser, updateProfile } = useAuth();
@@ -30,8 +34,51 @@ export const ProfilePage: React.FC = () => {
     getAcceptedConnections, 
     getUserSocialProfiles, 
     addSocialProfile,
+    updateSocialProfile,
     removeSocialProfile 
   } = useNetwork();
+
+  const { userId: routeUserId } = useParams<{ userId?: string }>();
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const targetUserId = routeUserId || searchParams.get('userId');
+  const isViewingOtherUser = Boolean(targetUserId && targetUserId !== currentUser?.id);
+
+  // Target User Profile State (when viewing another person's profile from 3D Lab or People)
+  const [targetProfile, setTargetProfile] = useState<any | null>(null);
+  const [loadingTarget, setLoadingTarget] = useState(false);
+  const [targetError, setTargetError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isViewingOtherUser || !targetUserId) {
+      setTargetProfile(null);
+      return;
+    }
+    let isMounted = true;
+    setLoadingTarget(true);
+    setTargetError(null);
+
+    api.profile.getSocialProfile(targetUserId)
+      .then(res => {
+        if (isMounted) {
+          setTargetProfile(res);
+        }
+      })
+      .catch(err => {
+        if (isMounted) {
+          setTargetError(err.message || 'User not found');
+        }
+      })
+      .finally(() => {
+        if (isMounted) {
+          setLoadingTarget(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [isViewingOtherUser, targetUserId]);
 
   // Edit Profile form state
   const [isEditing, setIsEditing] = useState(false);
@@ -54,6 +101,33 @@ export const ProfilePage: React.FC = () => {
   const [socialUrl, setSocialUrl] = useState('');
   const [socialUsername, setSocialUsername] = useState('');
   const [socialError, setSocialError] = useState('');
+
+  // Edit social link state
+  const [editingSocialId, setEditingSocialId] = useState<string | null>(null);
+  const [editSocialPlatform, setEditSocialPlatform] = useState<SocialProfile['platform']>('instagram');
+  const [editSocialUrl, setEditSocialUrl] = useState('');
+  const [editSocialUsername, setEditSocialUsername] = useState('');
+  const [editSocialError, setEditSocialError] = useState('');
+
+  // Deterministic client-side platform detector for instant responsive UI preview
+  const detectClientPlatform = (url: string): SocialProfile['platform'] | null => {
+    try {
+      let candidate = url.trim();
+      if (!candidate) return null;
+      if (!/^https?:\/\//i.test(candidate)) candidate = `https://${candidate}`;
+      const host = new URL(candidate).hostname.toLowerCase().replace(/^www\./, '');
+      if (host === 'instagram.com' || host.endsWith('.instagram.com')) return 'instagram';
+      if (host === 'github.com' || host.endsWith('.github.com')) return 'github';
+      if (host === 'linkedin.com' || host.endsWith('.linkedin.com')) return 'linkedin';
+      if (host === 'youtube.com' || host.endsWith('.youtube.com') || host === 'youtu.be') return 'youtube';
+      if (host === 'x.com' || host.endsWith('.x.com') || host === 'twitter.com' || host.endsWith('.twitter.com')) return 'x';
+      if (host === 'facebook.com' || host.endsWith('.facebook.com') || host === 'fb.com') return 'facebook';
+      if (host === 'scholar.google.com') return 'scholar';
+      return 'other';
+    } catch {
+      return null;
+    }
+  };
 
   // Active Stat Drawer / Modal Tab: 'mutuals' | 'followers' | 'following' | null
   const [activeStatsTab, setActiveStatsTab] = useState<'mutuals' | 'followers' | 'following' | null>(null);
@@ -169,27 +243,57 @@ export const ProfilePage: React.FC = () => {
   };
 
   // Add Social Profile
-  const handleAddSocial = (e: React.FormEvent) => {
+  const handleAddSocial = async (e: React.FormEvent) => {
     e.preventDefault();
     setSocialError('');
 
     const urlTrimmed = socialUrl.trim();
     const handleTrimmed = socialUsername.trim();
 
-    if (!handleTrimmed) {
-      setSocialError('Display handle is required.');
+    if (!urlTrimmed) {
+      setSocialError('Profile URL is required.');
       return;
     }
 
-    if (!/^https?:\/\/[^\s$.?#].[^\s]*$/i.test(urlTrimmed)) {
-      setSocialError('Profile URL must start with http:// or https://');
+    try {
+      await addSocialProfile(socialPlatform, urlTrimmed, handleTrimmed);
+      setSocialUrl('');
+      setSocialUsername('');
+      setShowAddSocial(false);
+    } catch (err: any) {
+      setSocialError(err.message || 'Failed to add social profile');
+    }
+  };
+
+  // Start Editing Social Profile
+  const handleStartEditSocial = (sp: SocialProfile) => {
+    setEditingSocialId(sp.id);
+    setEditSocialPlatform(sp.platform as any);
+    setEditSocialUrl(sp.profile_url);
+    setEditSocialUsername(sp.display_username);
+    setEditSocialError('');
+  };
+
+  // Save Edited Social Profile
+  const handleSaveEditSocial = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingSocialId) return;
+    setEditSocialError('');
+
+    const urlTrimmed = editSocialUrl.trim();
+    const handleTrimmed = editSocialUsername.trim();
+
+    if (!urlTrimmed) {
+      setEditSocialError('Profile URL is required.');
       return;
     }
 
-    addSocialProfile(socialPlatform, urlTrimmed, handleTrimmed);
-    setSocialUrl('');
-    setSocialUsername('');
-    setShowAddSocial(false);
+    try {
+      await updateSocialProfile(editingSocialId, urlTrimmed, handleTrimmed, editSocialPlatform);
+      setEditingSocialId(null);
+    } catch (err: any) {
+      setEditSocialError(err.message || 'Failed to update social profile');
+    }
   };
 
   // Render platform icon (supporting Instagram, YouTube, LinkedIn, GitHub, X, Facebook, Other)
@@ -244,6 +348,209 @@ export const ProfilePage: React.FC = () => {
     }
   };
 
+  // Render Target Other User's Profile (Requirements 25-31: Only this person's profile)
+  if (isViewingOtherUser) {
+    if (loadingTarget) {
+      return (
+        <div className="flex-1 max-w-5xl mx-auto w-full p-4 sm:p-6 lg:p-8 flex items-center justify-center min-h-[400px]">
+          <div className="flex items-center gap-3 text-slate-500 text-xs">
+            <Loader2 className="h-5 w-5 animate-spin text-indigo-600" />
+            <span>Loading profile...</span>
+          </div>
+        </div>
+      );
+    }
+
+    if (targetError || !targetProfile) {
+      return (
+        <div className="flex-1 max-w-5xl mx-auto w-full p-4 sm:p-6 lg:p-8">
+          <button
+            type="button"
+            onClick={() => navigate(-1)}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors shadow-2xs mb-6 cursor-pointer"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            <span>Back</span>
+          </button>
+          <div className="glass-panel rounded-3xl p-8 border border-slate-200/80 shadow-md text-center max-w-md mx-auto">
+            <AlertCircle className="h-8 w-8 text-rose-500 mx-auto mb-2" />
+            <h3 className="text-base font-semibold text-slate-800">User Not Found</h3>
+            <p className="text-xs text-slate-500 mt-1">{targetError || 'Unable to retrieve profile information.'}</p>
+          </div>
+        </div>
+      );
+    }
+
+    const { user: otherUser, isMutual: otherIsMutual, canViewConnectedSection: otherCanView, socialProfiles: otherSocials } = targetProfile;
+    const otherMolecule = getMoleculeIdentity(otherUser.moleculeIdentity);
+
+    return (
+      <div className="flex-1 max-w-5xl mx-auto w-full p-4 sm:p-6 lg:p-8 space-y-6">
+        {/* Navigation Back Button */}
+        <div>
+          <button
+            type="button"
+            onClick={() => navigate(-1)}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white/90 px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-white hover:text-slate-900 transition-colors shadow-2xs cursor-pointer"
+          >
+            <ArrowLeft className="h-4 w-4 text-indigo-600" />
+            <span>Back</span>
+          </button>
+        </div>
+
+        {/* Target User Profile Header Card */}
+        <div className="glass-panel rounded-3xl p-6 sm:p-8 border border-slate-200/80 shadow-md">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
+            <div className="flex items-center gap-5">
+              <UserAvatar
+                avatarUrl={otherUser.avatar_url}
+                name={otherUser.name}
+                size="xl"
+                className="ring-4 ring-white shadow-md shrink-0"
+              />
+
+              <div>
+                <div className="flex items-center gap-2">
+                  <h1 className="text-xl sm:text-2xl font-semibold text-slate-900 leading-tight">
+                    {otherUser.name}
+                  </h1>
+                  {otherUser.gender && (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-medium border border-slate-200/60">
+                      {otherUser.gender}
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs sm:text-sm text-slate-400 font-mono mt-0.5">
+                  @{otherUser.username}
+                </p>
+              </div>
+            </div>
+
+            {/* Relationship Status Badge */}
+            <div>
+              {otherIsMutual ? (
+                <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs">
+                  <UserCheck className="h-3.5 w-3.5" />
+                  <span>Mutual Connection · 3D Bond Active</span>
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200 shadow-2xs">
+                  <Users className="h-3.5 w-3.5" />
+                  <span>Public Profile</span>
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Bio text */}
+          {otherUser.bio && (
+            <div className="mt-5 pt-5 border-t border-slate-100">
+              <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">Bio</h4>
+              <p className="text-xs sm:text-sm text-slate-700 leading-relaxed max-w-2xl whitespace-pre-wrap">
+                {otherUser.bio}
+              </p>
+            </div>
+          )}
+
+          {/* Molecular Avatar Card */}
+          <div className="mt-5 pt-5 border-t border-slate-100 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div
+                className="w-4 h-4 rounded-full ring-2 ring-white shadow-xs"
+                style={{ backgroundColor: otherMolecule.theme.glowColor }}
+              />
+              <div>
+                <span className="text-xs font-semibold text-slate-900">
+                  {otherMolecule.name}
+                </span>
+                <span className="text-xs text-slate-400 ml-1.5">
+                  · {otherMolecule.motif}
+                </span>
+              </div>
+            </div>
+            <span className="text-[11px] font-mono text-indigo-600 font-semibold bg-indigo-50 px-2.5 py-1 rounded-full border border-indigo-100">
+              Molecular Avatar
+            </span>
+          </div>
+        </div>
+
+        {/* Connected Details: Verified Social Profiles or Gated Indicator */}
+        {otherCanView ? (
+          <div className="glass-panel rounded-3xl p-6 sm:p-8 border border-slate-200/80 shadow-md space-y-4">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-900">Verified Social Profiles</h3>
+              <p className="text-xs text-slate-400 mt-0.5">Connected accounts authorized for mutual connections</p>
+            </div>
+
+            {otherSocials && otherSocials.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                {otherSocials.map((sp: any) => (
+                  <div
+                    key={sp.id}
+                    className="flex items-center justify-between p-3 rounded-2xl border border-slate-200/70 bg-white/70 hover:bg-white hover:border-indigo-200 hover:shadow-xs transition-all group"
+                  >
+                    <div className="flex items-center gap-3 truncate flex-1 min-w-0">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 shrink-0 transition-transform group-hover:scale-105">
+                        {renderPlatformIcon(sp.platform)}
+                      </div>
+                      <div className="truncate">
+                        <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                          {getPlatformLabel(sp.platform)}
+                        </p>
+                        <p className="text-xs font-medium text-slate-800 truncate">
+                          {sp.display_username}
+                        </p>
+                      </div>
+                    </div>
+                    <a
+                      href={sp.normalized_url || sp.profile_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="ml-2 inline-flex items-center gap-1 rounded-lg bg-indigo-50 px-2.5 py-1 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100 transition-colors shrink-0"
+                    >
+                      <span>Visit</span>
+                      <span className="text-xs">→</span>
+                    </a>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-slate-400 italic">No social profiles listed.</p>
+            )}
+
+            {/* Showcase Suggestions */}
+            {otherUser.showcase_suggestions && otherUser.showcase_suggestions.length > 0 && (
+              <div className="pt-4 border-t border-slate-100">
+                <h4 className="text-xs font-semibold text-slate-800 mb-2">Showcase Suggestions</h4>
+                <div className="flex flex-wrap gap-2">
+                  {otherUser.showcase_suggestions.map((item: string, idx: number) => (
+                    <span
+                      key={idx}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-indigo-50 text-indigo-700 border border-indigo-100"
+                    >
+                      <Sparkles className="h-3 w-3 text-indigo-500" />
+                      <span>{item}</span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="glass-panel rounded-3xl p-8 border border-slate-200/80 shadow-md text-center max-w-xl mx-auto">
+            <div className="h-12 w-12 rounded-2xl bg-slate-100 text-slate-500 flex items-center justify-center mx-auto mb-3">
+              <Lock className="h-6 w-6" />
+            </div>
+            <h3 className="text-sm font-semibold text-slate-800">Connected Profile Gated</h3>
+            <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+              This person's verified social profiles and connected network details are visible only to mutual connections.
+            </p>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="flex-1 max-w-5xl mx-auto w-full p-4 sm:p-6 lg:p-8 space-y-8">
       {/* 1. Profile Header Card */}
@@ -251,10 +558,11 @@ export const ProfilePage: React.FC = () => {
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
           <div className="flex items-center gap-5">
             <div className="relative group">
-              <img
-                src={currentUser.avatar_url}
-                alt={currentUser.name}
-                className="h-20 w-20 rounded-full object-cover ring-4 ring-white shadow-md shrink-0"
+              <UserAvatar
+                avatarUrl={currentUser.avatar_url}
+                name={currentUser.name}
+                size="xl"
+                className="ring-4 ring-white shadow-md shrink-0"
               />
               {isEditing && (
                 <button
@@ -318,10 +626,11 @@ export const ProfilePage: React.FC = () => {
 
             {/* Profile Photo Change Row */}
             <div className="flex items-center gap-4 p-3 rounded-2xl bg-slate-50/80 border border-slate-200/60">
-              <img
-                src={avatarUrl || currentUser.avatar_url}
-                alt="Selected Profile"
-                className="h-14 w-14 rounded-full object-cover ring-2 ring-indigo-200 shadow-xs shrink-0"
+              <UserAvatar
+                avatarUrl={avatarUrl || currentUser.avatar_url}
+                name={name || currentUser.name}
+                size="lg"
+                className="ring-2 ring-indigo-200 shadow-xs shrink-0"
               />
               <div className="flex-1">
                 <p className="text-xs font-semibold text-slate-800">Profile Photo</p>
@@ -608,10 +917,11 @@ export const ProfilePage: React.FC = () => {
                     className="flex items-center justify-between p-3 rounded-2xl border border-slate-200/70 bg-white/70 hover:bg-white transition-all shadow-xs"
                   >
                     <div className="flex items-center gap-3 truncate">
-                      <img
-                        src={u.avatar_url}
-                        alt={u.name}
-                        className="h-10 w-10 rounded-full object-cover ring-2 ring-indigo-100 shrink-0"
+                      <UserAvatar
+                        avatarUrl={u.avatar_url}
+                        name={u.name}
+                        size="sm"
+                        className="ring-2 ring-indigo-100 shrink-0"
                       />
                       <div className="truncate">
                         <p className="text-xs font-semibold text-slate-900 truncate">{u.name}</p>
@@ -665,9 +975,9 @@ export const ProfilePage: React.FC = () => {
                   <option value="github">GitHub</option>
                   <option value="linkedin">LinkedIn</option>
                   <option value="youtube">YouTube</option>
-                  <option value="x">X (Twitter)</option>
+                  <option value="x">X</option>
                   <option value="facebook">Facebook</option>
-                  <option value="website">Personal Website / Other</option>
+                  <option value="other">Other / Personal Website</option>
                 </select>
               </div>
 
@@ -688,7 +998,12 @@ export const ProfilePage: React.FC = () => {
                   type="url"
                   placeholder="https://..."
                   value={socialUrl}
-                  onChange={e => setSocialUrl(e.target.value)}
+                  onChange={e => {
+                    const val = e.target.value;
+                    setSocialUrl(val);
+                    const detected = detectClientPlatform(val);
+                    if (detected) setSocialPlatform(detected);
+                  }}
                   className="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-900 focus:outline-none"
                 />
               </div>
@@ -719,56 +1034,152 @@ export const ProfilePage: React.FC = () => {
           </form>
         )}
 
-        {/* Existing Social Profiles List */}
+        {/* Existing Social Profiles List with Inline Editing and Visit Action */}
         {socialProfiles.length === 0 ? (
           <p className="text-xs text-slate-400 italic">No social profiles linked yet.</p>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-            {socialProfiles.map(sp => (
-              <div
-                key={sp.id}
-                className="relative flex items-center justify-between p-3 rounded-2xl border border-slate-200/70 bg-white/70 hover:bg-white hover:border-indigo-200 hover:shadow-xs transition-all group"
-              >
-                <a
-                  href={sp.profile_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="flex items-center gap-3 truncate flex-1"
-                >
-                  <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 shrink-0 transition-transform group-hover:scale-105">
-                    {renderPlatformIcon(sp.platform)}
-                  </div>
-                  <div className="truncate">
-                    <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                      {getPlatformLabel(sp.platform)}
-                    </p>
-                    <p className="text-xs font-medium text-slate-800 truncate group-hover:text-indigo-600 transition-colors">
-                      {sp.display_username}
-                    </p>
-                  </div>
-                </a>
+            {socialProfiles.map(sp => {
+              if (editingSocialId === sp.id) {
+                return (
+                  <form
+                    key={sp.id}
+                    onSubmit={handleSaveEditSocial}
+                    className="col-span-full p-4 rounded-2xl bg-indigo-50/70 border border-indigo-200 space-y-3 shadow-xs"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-semibold text-slate-800">Edit Social Profile</span>
+                        <span className="text-[10px] uppercase font-bold text-indigo-600 bg-white px-2 py-0.5 rounded-full border border-indigo-100">
+                          {getPlatformLabel(editSocialPlatform)}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setEditingSocialId(null)}
+                        className="text-slate-400 hover:text-slate-700 text-xs cursor-pointer"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div>
+                        <label className="block text-[11px] font-medium text-slate-700 mb-1">Platform</label>
+                        <select
+                          value={editSocialPlatform}
+                          onChange={e => setEditSocialPlatform(e.target.value as any)}
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-900 focus:outline-none"
+                        >
+                          <option value="instagram">Instagram</option>
+                          <option value="github">GitHub</option>
+                          <option value="linkedin">LinkedIn</option>
+                          <option value="youtube">YouTube</option>
+                          <option value="x">X</option>
+                          <option value="facebook">Facebook</option>
+                          <option value="other">Other / Personal Website</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-medium text-slate-700 mb-1">Display Handle / Username</label>
+                        <input
+                          type="text"
+                          value={editSocialUsername}
+                          onChange={e => setEditSocialUsername(e.target.value)}
+                          placeholder="@handle"
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-900 focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-medium text-slate-700 mb-1">Profile URL</label>
+                        <input
+                          type="url"
+                          value={editSocialUrl}
+                          onChange={e => {
+                            const val = e.target.value;
+                            setEditSocialUrl(val);
+                            const detected = detectClientPlatform(val);
+                            if (detected) setEditSocialPlatform(detected);
+                          }}
+                          placeholder="https://..."
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-900 focus:outline-none"
+                        />
+                      </div>
+                    </div>
+                    {editSocialError && (
+                      <p className="text-[11px] text-rose-600 flex items-center gap-1">
+                        <AlertCircle className="h-3 w-3" />
+                        <span>{editSocialError}</span>
+                      </p>
+                    )}
+                    <div className="flex items-center gap-2 justify-end pt-1">
+                      <button
+                        type="button"
+                        onClick={() => setEditingSocialId(null)}
+                        className="px-3 py-1 text-xs text-slate-500 hover:text-slate-800 cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        className="rounded-lg bg-indigo-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 transition-colors shadow-xs cursor-pointer"
+                      >
+                        Save Changes
+                      </button>
+                    </div>
+                  </form>
+                );
+              }
 
-                <div className="flex items-center gap-1 pl-2">
-                  <a
-                    href={sp.profile_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="p-1 text-slate-400 hover:text-indigo-600 rounded transition-colors"
-                    title="Open link"
-                  >
-                    <ExternalLink className="h-3 w-3" />
-                  </a>
-                  <button
-                    type="button"
-                    onClick={() => removeSocialProfile(sp.id)}
-                    className="p-1 text-slate-300 hover:text-rose-500 rounded transition-colors cursor-pointer"
-                    title="Remove social profile"
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </button>
+              return (
+                <div
+                  key={sp.id}
+                  className="relative flex items-center justify-between p-3 rounded-2xl border border-slate-200/70 bg-white/70 hover:bg-white hover:border-indigo-200 hover:shadow-xs transition-all group"
+                >
+                  <div className="flex items-center gap-3 truncate flex-1 min-w-0">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 shrink-0 transition-transform group-hover:scale-105">
+                      {renderPlatformIcon(sp.platform)}
+                    </div>
+                    <div className="truncate">
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                        {getPlatformLabel(sp.platform)}
+                      </p>
+                      <p className="text-xs font-medium text-slate-800 truncate">
+                        {sp.display_username}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-1.5 pl-2 shrink-0">
+                    <a
+                      href={sp.normalized_url || sp.profile_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 rounded-lg bg-indigo-50 px-2.5 py-1 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100 transition-colors"
+                      title="Visit Profile"
+                    >
+                      <span>Visit</span>
+                      <span className="text-xs">→</span>
+                    </a>
+                    <button
+                      type="button"
+                      onClick={() => handleStartEditSocial(sp)}
+                      className="p-1 text-slate-400 hover:text-indigo-600 rounded transition-colors cursor-pointer"
+                      title="Edit social profile"
+                    >
+                      <Edit3 className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeSocialProfile(sp.id)}
+                      className="p-1 text-slate-300 hover:text-rose-500 rounded transition-colors cursor-pointer"
+                      title="Remove social profile"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

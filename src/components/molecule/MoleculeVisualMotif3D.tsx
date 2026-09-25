@@ -1,4 +1,4 @@
-import React, { useRef, useMemo } from 'react';
+import React, { useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { MoleculeIdentityConfig } from '../../types';
@@ -6,8 +6,6 @@ import { MoleculeIdentityConfig } from '../../types';
 interface MoleculeVisualMotif3DProps {
   identity: MoleculeIdentityConfig;
   isSelf?: boolean;
-  smoky?: boolean;
-  twinkling?: boolean;
 }
 
 /**
@@ -15,14 +13,10 @@ interface MoleculeVisualMotif3DProps {
  */
 export const MoleculeVisualMotif3D: React.FC<MoleculeVisualMotif3DProps> = ({
   identity,
-  smoky = false,
-  twinkling = false,
 }) => {
   const groupRef = useRef<THREE.Group>(null);
   const wispRef1 = useRef<THREE.Group>(null);
   const wispRef2 = useRef<THREE.Group>(null);
-  const smokyRef = useRef<THREE.Group>(null);
-  const twinkleRef = useRef<THREE.Points>(null);
 
   const { theme } = identity;
 
@@ -44,33 +38,7 @@ export const MoleculeVisualMotif3D: React.FC<MoleculeVisualMotif3DProps> = ({
       wispRef2.current.rotation.z = Math.cos(t * 0.25) * 0.1;
     }
 
-    if (smokyRef.current) {
-      smokyRef.current.rotation.y = t * 0.1;
-      smokyRef.current.rotation.x = Math.sin(t * 0.15) * 0.08;
-    }
-
-    if (twinkleRef.current) {
-      // Gentle sinusoidal twinkle pulse
-      const pulse = 0.65 + Math.sin(t * 2.2) * 0.35;
-      const mat = twinkleRef.current.material as THREE.PointsMaterial;
-      if (mat) {
-        mat.opacity = pulse;
-      }
-    }
   });
-
-  // Generates 8 tiny, delicate twinkling star points within the sphere volume
-  const twinklePositions = useMemo(() => {
-    const pts = new Float32Array(8 * 3);
-    const r = 0.38;
-    const angles = [0.2, 1.1, 1.9, 2.7, 3.5, 4.3, 5.1, 5.9];
-    angles.forEach((a, i) => {
-      pts[i * 3] = Math.cos(a) * r * (0.6 + (i % 3) * 0.15);
-      pts[i * 3 + 1] = Math.sin(a * 1.5) * r * 0.7;
-      pts[i * 3 + 2] = Math.sin(a) * r * (0.6 + (i % 2) * 0.2);
-    });
-    return pts;
-  }, []);
 
   // Identity-specific smooth 3D wisp geometries
   const renderIdentityWisps = () => {
@@ -465,57 +433,6 @@ export const MoleculeVisualMotif3D: React.FC<MoleculeVisualMotif3DProps> = ({
     <group ref={groupRef}>
       {/* 1. Core Internal Wisp & Motif System */}
       {renderIdentityWisps()}
-
-      {/* 2. Optional Smoky Effect Layer (PDF Page 19: Fluffy translucent cloud-like wisps) */}
-      {smoky && (
-        <group ref={smokyRef}>
-          <mesh rotation={[0.2, 0.5, 0.1]}>
-            <sphereGeometry args={[0.42, 28, 28]} />
-            <meshPhysicalMaterial
-              color={theme.internalWispColor}
-              emissive={theme.glowColor}
-              emissiveIntensity={0.3}
-              transparent={true}
-              opacity={0.22}
-              roughness={0.4}
-              transmission={0.6}
-              thickness={0.8}
-            />
-          </mesh>
-          <mesh rotation={[-0.3, 0.2, -0.4]}>
-            <torusGeometry args={[0.41, 0.03, 16, 48, Math.PI * 1.8]} />
-            <meshStandardMaterial
-              color="#FFFFFF"
-              emissive={theme.glowColor}
-              emissiveIntensity={0.35}
-              transparent={true}
-              opacity={0.35}
-              roughness={0.3}
-            />
-          </mesh>
-        </group>
-      )}
-
-      {/* 3. Optional Twinkling Effect Layer (PDF Page 20: Tiny controlled light points, gentle pulse) */}
-      {twinkling && (
-        <points ref={twinkleRef}>
-          <bufferGeometry>
-            <bufferAttribute
-              attach="attributes-position"
-              count={8}
-              array={twinklePositions}
-              itemSize={3}
-            />
-          </bufferGeometry>
-          <pointsMaterial
-            size={0.045}
-            color="#FFFFFF"
-            transparent={true}
-            opacity={0.85}
-            sizeAttenuation={true}
-          />
-        </points>
-      )}
     </group>
   );
 };

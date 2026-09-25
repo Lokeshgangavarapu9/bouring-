@@ -1,5 +1,30 @@
 import { User, Connection, GraphNode3D, GraphBond3D } from '../../types';
 
+export interface LayoutInput {
+  nodes: Array<{ id: string; user: User; degree?: number }>;
+  edges: Array<{ sourceId: string; targetId: string }>;
+  degree?: Map<string, number>;
+  clustering?: Map<string, number>;
+  communities?: string[][];
+  topology?: string;
+}
+
+export interface LayoutResult {
+  nodes: GraphNode3D[];
+  bonds: GraphBond3D[];
+  metadata?: {
+    algorithm: string;
+    iterations: number;
+    computationTimeMs: number;
+    score?: number;
+  };
+}
+
+export interface LayoutEngine {
+  name: string;
+  computeLayout(input: LayoutInput, options?: Partial<LayoutOptions>): LayoutResult;
+}
+
 export interface LayoutOptions {
   repulsion: number;
   springLength: number;
@@ -15,16 +40,35 @@ const DEFAULT_OPTIONS: LayoutOptions = {
 };
 
 /**
+ * Agent-Ready Classical Baseline Layout Engine
+ */
+export class ClassicalLayoutEngine implements LayoutEngine {
+  name = 'Classical Force-Directed Baseline';
+
+  computeLayout(input: LayoutInput, options?: Partial<LayoutOptions>): LayoutResult {
+    const users = input.nodes.map(n => n.user);
+    const connections: Connection[] = input.edges.map((e, idx) => ({
+      id: `edge-${idx}`,
+      requester_id: e.sourceId,
+      receiver_id: e.targetId,
+      status: 'ACCEPTED_ONE_WAY',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }));
+    return computeClassicalLayout(users, connections, options);
+  }
+}
+
+/**
  * Classical 3D Force-Directed Layout for Molecule MVP
  * Computes 3D coordinates for nodes and assigns bond connections.
- * This is a deterministic, modular classical algorithm designed to be 
- * replaceable later by AI candidate layouts and quantum optimization.
+ * This is an internal baseline algorithm designed to be driven by backend/AI agents.
  */
 export function computeClassicalLayout(
   users: User[],
   connections: Connection[],
   options: Partial<LayoutOptions> = {}
-): { nodes: GraphNode3D[]; bonds: GraphBond3D[] } {
+): LayoutResult {
   const opts = { ...DEFAULT_OPTIONS, ...options };
 
   // 1. Enforce Mutual Rule: Only reciprocal connections form molecular bonds!

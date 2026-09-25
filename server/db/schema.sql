@@ -34,7 +34,34 @@ CREATE TABLE IF NOT EXISTS social_profiles (
   platform TEXT NOT NULL,
   profile_url TEXT NOT NULL,
   display_username TEXT NOT NULL,
+  normalized_url TEXT,
+  hostname TEXT,
+  icon_id TEXT,
   created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_social_profiles_user ON social_profiles(user_id);
+
+CREATE TABLE IF NOT EXISTS external_identities (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  provider_user_id TEXT NOT NULL,
+  provider_email TEXT,
+  created_at TEXT NOT NULL,
+  CONSTRAINT unique_provider_user UNIQUE (provider, provider_user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ext_identities_lookup ON external_identities(provider, provider_user_id);
+CREATE INDEX IF NOT EXISTS idx_ext_identities_user ON external_identities(user_id);
+
+CREATE TABLE IF NOT EXISTS user_molecule_identities (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  identity_type TEXT NOT NULL DEFAULT 'default',
+  model_version TEXT NOT NULL DEFAULT 'v1',
+  parameters TEXT DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS relationships (
@@ -44,12 +71,18 @@ CREATE TABLE IF NOT EXISTS relationships (
   status TEXT NOT NULL CHECK(status IN ('REQUESTED', 'ACCEPTED_ONE_WAY', 'REJECTED', 'CANCELLED')),
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
+  accepted_at TEXT,
+  mutual_at TEXT,
+  disconnected_at TEXT,
+  cancelled_at TEXT,
+  version INTEGER DEFAULT 1,
   CONSTRAINT unique_directed_pair UNIQUE (requester_id, receiver_id),
   CONSTRAINT no_self_relation CHECK (requester_id != receiver_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_rel_requester ON relationships(requester_id);
 CREATE INDEX IF NOT EXISTS idx_rel_receiver ON relationships(receiver_id);
+CREATE INDEX IF NOT EXISTS idx_rel_status ON relationships(status);
 CREATE INDEX IF NOT EXISTS idx_rel_lookup ON relationships(requester_id, receiver_id, status);
 
 CREATE TABLE IF NOT EXISTS mutual_relationships (
@@ -67,6 +100,7 @@ CREATE INDEX IF NOT EXISTS idx_mutual_b ON mutual_relationships(user_b_id);
 CREATE TABLE IF NOT EXISTS user_graph_versions (
   user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   graph_version INTEGER DEFAULT 1,
+  graph_hash TEXT DEFAULT '',
   updated_at TEXT NOT NULL
 );
 
@@ -83,3 +117,5 @@ CREATE TABLE IF NOT EXISTS layout_cache (
 );
 
 CREATE INDEX IF NOT EXISTS idx_cache_lookup ON layout_cache(host_user_id, graph_version, algorithm_version);
+CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);

@@ -48,9 +48,12 @@ export interface User {
 export interface SocialProfile {
   id: string;
   user_id: string;
-  platform: 'github' | 'x' | 'linkedin' | 'website' | 'scholar' | 'instagram' | 'youtube' | 'facebook' | 'other';
+  platform: 'github' | 'x' | 'linkedin' | 'website' | 'scholar' | 'instagram' | 'youtube' | 'facebook' | 'other' | string;
   profile_url: string;
   display_username: string;
+  normalized_url?: string;
+  hostname?: string;
+  icon_id?: string;
 }
 
 export interface Connection {

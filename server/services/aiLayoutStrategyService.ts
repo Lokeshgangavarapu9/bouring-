@@ -53,6 +53,8 @@ export function generateLayoutStrategy(
 ): LayoutStrategyCandidate[] {
   const n = graph.vertices.length;
   const m = graph.edges.length;
+  const maxPossibleEdges = n > 1 ? (n * (n - 1)) / 2 : 1;
+  const graphDensity = n > 1 ? m / maxPossibleEdges : 0;
 
   const candidates: LayoutStrategyCandidate[] = [];
 
@@ -142,7 +144,7 @@ export function generateLayoutStrategy(
     family: 'SPHERICAL_GOLDEN_SPIRAL',
     name: 'Spherical Golden Spiral Relaxation',
     description: 'Fibonacci-distributed spherical seeding followed by Fruchterman-Reingold energy minimization.',
-    rationale: `Graph has ${n} nodes and ${m} mutual bonds (density: ${structure.density.toFixed(2)}). Fibonacci seeding avoids planar collapse.`,
+    rationale: `Graph has ${n} nodes and ${m} mutual bonds (density: ${graphDensity.toFixed(2)}). Fibonacci seeding avoids planar collapse.`,
     parameters: {
       repulsion: 85,
       springLength: 4.2,

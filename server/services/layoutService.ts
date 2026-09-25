@@ -1,5 +1,5 @@
 import { db } from '../db/database.ts';
-import { SanitizedUser } from './authService.ts';
+import { SanitizedUser, getUserById } from './authService.ts';
 import { constructEgoGraph, ConstructedGraph } from './graphConstructionService.ts';
 import { buildEgoGraph } from './graphAnalysisService.ts';
 import { classifyStructure, StructureClassification } from './structureClassificationService.ts';
@@ -75,9 +75,12 @@ function getCurrentGraphVersion(userId: string): number {
  *        ↓
  * Interactive 3D Molecular Layout
  */
+import { requestRemoteAgentLayout, buildCompactGraphSummary } from './remoteAgentClient.ts';
+
 export function getOrComputeLayout(
   hostUserId: string,
-  optimizer: LayoutOptimizer = defaultOptimizer
+  optimizer: LayoutOptimizer = defaultOptimizer,
+  aiStrategyOverride?: LayoutStrategyCandidate
 ): NetworkLayoutResponse {
   const startTime = performance.now();
   const graphVersion = getCurrentGraphVersion(hostUserId);
@@ -90,13 +93,22 @@ export function getOrComputeLayout(
       const qualityMetrics = JSON.parse(cached.quality_metrics);
       const structure = JSON.parse(cached.structure_class);
 
+      // Hydrate nodes with fresh authoritative user profile data
+      const hydratedNodes: LayoutNode3D[] = (layoutData.nodes || []).map((n: LayoutNode3D) => {
+        const fresh = getUserById(n.id);
+        return {
+          ...n,
+          user: fresh || n.user,
+        };
+      });
+
       return {
         hostUserId,
         graphVersion,
         algorithmVersion: ALGORITHM_VERSION,
         structure,
         strategyUsed: layoutData.strategyUsed,
-        nodes: layoutData.nodes,
+        nodes: hydratedNodes,
         bonds: layoutData.bonds,
         qualityMetrics: {
           ...qualityMetrics,
@@ -115,8 +127,13 @@ export function getOrComputeLayout(
   const structure = classifyStructure(ego.metrics);
 
   // 4. Module C: AI / Heuristic Layout Strategy & Candidate Generation
-  const candidates = generateLayoutStrategy(constructedGraph, structure);
-  const selectedStrategy = candidates[0]; // Best topological fit
+  let selectedStrategy: LayoutStrategyCandidate;
+  if (aiStrategyOverride) {
+    selectedStrategy = aiStrategyOverride;
+  } else {
+    const candidates = generateLayoutStrategy(constructedGraph, structure);
+    selectedStrategy = candidates[0]; // Best topological fit
+  }
 
   // 5. Module D: Optimization Service (Classical or Quantum Formulation)
   const seed = `${hostUserId}-v${graphVersion}`;
@@ -199,4 +216,39 @@ export function getOrComputeLayout(
     qualityMetrics,
     fromCache: false,
   };
+}
+
+/**
+ * Async layout computation: queries remote Colab AI agent when configured,
+ * seamlessly falling back to classical deterministic layout if remote agent is offline.
+ */
+export async function getOrComputeLayoutAsync(
+  hostUserId: string,
+  optimizer: LayoutOptimizer = defaultOptimizer
+): Promise<NetworkLayoutResponse> {
+  const graphVersion = getCurrentGraphVersion(hostUserId);
+
+  // 1. Fast cache check
+  const cached = getCachedLayout(hostUserId, graphVersion, ALGORITHM_VERSION);
+  if (cached) {
+    return getOrComputeLayout(hostUserId, optimizer);
+  }
+
+  // 2. Query remote agent if configured
+  try {
+    const constructedGraph = constructEgoGraph(hostUserId);
+    const ego = buildEgoGraph(hostUserId);
+    const structure = classifyStructure(ego.metrics);
+    const summary = buildCompactGraphSummary(constructedGraph, ego.metrics, graphVersion);
+
+    const remoteCandidate = await requestRemoteAgentLayout(hostUserId, summary);
+    if (remoteCandidate) {
+      return getOrComputeLayout(hostUserId, optimizer, remoteCandidate);
+    }
+  } catch (err) {
+    console.warn('[LayoutService] Remote AI invocation error, using classical baseline:', err);
+  }
+
+  // 3. Fallback to classical layout
+  return getOrComputeLayout(hostUserId, optimizer);
 }
