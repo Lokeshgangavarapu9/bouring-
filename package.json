@@ -12,7 +12,8 @@
     "test:backend": "npx tsx server/test/backend.test.ts",
     "test:agent": "npx tsx server/test/agent.test.ts",
     "test:python-agent": "python -m unittest agent/tests/test_agent.py",
-    "build": "tsc && vite build",
+    "build:serverless": "node scripts/build-serverless.js",
+    "build": "node scripts/build-serverless.js && tsc && vite build",
     "preview": "vite preview"
   },
   "dependencies": {
