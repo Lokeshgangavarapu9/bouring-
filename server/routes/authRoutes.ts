@@ -1,4 +1,4 @@
-import { Router, Response } from 'express';
+import { Router, type Response } from 'express';
 import { signup, login, getAllUsers, getUserById } from '../services/authService.ts';
 import {
   getPublicSupabaseConfig,
@@ -6,7 +6,7 @@ import {
   supabaseUpdatePassword,
   isSupabaseConfigured,
 } from '../services/supabaseService.ts';
-import { authMiddleware, AuthenticatedRequest } from '../middleware/authMiddleware.ts';
+import { authMiddleware, type AuthenticatedRequest } from '../middleware/authMiddleware.ts';
 
 export const authRouter = Router();
 

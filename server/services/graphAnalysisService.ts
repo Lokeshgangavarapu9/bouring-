@@ -1,6 +1,6 @@
 import { db } from '../db/database.ts';
 import { getMutualPartnerIds } from './relationshipService.ts';
-import { getUserById, SanitizedUser } from './authService.ts';
+import { getUserById, type SanitizedUser } from './authService.ts';
 
 export interface EgoGraph {
   hostUserId: string;

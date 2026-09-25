@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import { db } from '../db/database.ts';
 import {
   isSupabaseConfigured,
+  getSupabaseAdminClient,
   supabaseSignUp,
   supabaseSignIn,
   verifySupabaseToken,
@@ -120,7 +121,7 @@ export function verifyToken(token: string): { userId: string } | null {
 }
 
 /**
- * Synchronize or create a public Boring user corresponding to a Supabase Auth identity
+ * Synchronize or create a public Boring user corresponding to a Supabase Auth identity (Synchronous)
  */
 export function syncSupabaseUser(
   authUser: { id: string; email?: string; user_metadata?: any },
@@ -132,17 +133,14 @@ export function syncSupabaseUser(
     return existing;
   }
 
-  // Check if an existing account has the same email
   const userEmail = (authUser.email || '').toLowerCase().trim();
   if (userEmail) {
     const byEmail = getUserByEmail(userEmail);
     if (byEmail) {
-      // Map user ID to authUser.id
       return sanitizeUser(byEmail);
     }
   }
 
-  // Create new public user record
   const now = new Date().toISOString();
   const rawMeta = authUser.user_metadata || {};
   const name = rawMeta.name || fallbackName || (userEmail ? userEmail.split('@')[0] : 'Boring User');
@@ -151,7 +149,6 @@ export function syncSupabaseUser(
     .replace(/[^a-z0-9_]/g, '');
   let username = baseUsername || `user_${Date.now()}`;
 
-  // Ensure username uniqueness
   if (getUserByUsername(username)) {
     username = `${username}_${Math.floor(1000 + Math.random() * 9000)}`;
   }
@@ -169,7 +166,7 @@ export function syncSupabaseUser(
     name,
     username,
     userEmail,
-    '', // Passwords managed exclusively by Supabase Auth
+    '',
     '',
     '',
     '',
@@ -194,6 +191,81 @@ export function syncSupabaseUser(
   return getUserById(authUser.id)!;
 }
 
+/**
+ * Synchronize user to Supabase PostgreSQL (Production) and local database
+ */
+export async function syncSupabaseUserAsync(
+  authUser: { id: string; email?: string; user_metadata?: any },
+  fallbackName?: string,
+  fallbackUsername?: string
+): Promise<SanitizedUser> {
+  const userEmail = (authUser.email || '').toLowerCase().trim();
+  const rawMeta = authUser.user_metadata || {};
+  const name = rawMeta.name || fallbackName || (userEmail ? userEmail.split('@')[0] : 'Boring User');
+  const baseUsername = (rawMeta.username || fallbackUsername || (userEmail ? userEmail.split('@')[0] : 'user'))
+    .toLowerCase()
+    .replace(/[^a-z0-9_]/g, '');
+  const now = new Date().toISOString();
+
+  // Supabase PostgreSQL Production Mode
+  if (isSupabaseConfigured() && process.env.NODE_ENV !== 'test') {
+    const admin = getSupabaseAdminClient();
+    if (admin) {
+      const { data: byId } = await admin.from('users').select('*').eq('id', authUser.id).maybeSingle();
+      if (byId) {
+        return sanitizeUser(byId as UserRow);
+      }
+
+      if (userEmail) {
+        const { data: byEmail } = await admin.from('users').select('*').ilike('email', userEmail).maybeSingle();
+        if (byEmail) {
+          return sanitizeUser(byEmail as UserRow);
+        }
+      }
+
+      let username = baseUsername || `user_${Date.now()}`;
+      const { data: byUname } = await admin.from('users').select('id').ilike('username', username).maybeSingle();
+      if (byUname) {
+        username = `${username}_${Math.floor(1000 + Math.random() * 9000)}`;
+      }
+
+      const newUser: UserRow = {
+        id: authUser.id,
+        name,
+        username,
+        email: userEmail,
+        password_hash: '',
+        avatar_url: '',
+        bio: '',
+        gender: '',
+        molecule_identity: 'default',
+        molecule_smoky: 0,
+        molecule_twinkling: 0,
+        showcase_suggestions: JSON.stringify([]),
+        created_at: now,
+        updated_at: now,
+      };
+
+      await admin.from('users').upsert(newUser);
+      await admin.from('privacy_settings').upsert({
+        user_id: authUser.id,
+        profile_visibility: 'PUBLIC',
+        email_visibility: 'CONNECTIONS_ONLY',
+        social_links_visibility: 'PUBLIC',
+      });
+      await admin.from('user_graph_versions').upsert({
+        user_id: authUser.id,
+        graph_version: 1,
+        updated_at: now,
+      });
+
+      return sanitizeUser(newUser);
+    }
+  }
+
+  return syncSupabaseUser(authUser, fallbackName, fallbackUsername);
+}
+
 export async function signup(
   name: string,
   username: string,
@@ -211,7 +283,7 @@ export async function signup(
   // Supabase Auth Integration (Production Mode)
   if (isSupabaseConfigured() && process.env.NODE_ENV !== 'test') {
     const { authUser, session } = await supabaseSignUp(name.trim(), cleanUsername, email.trim(), password || 'password123');
-    const user = syncSupabaseUser(authUser, name.trim(), cleanUsername);
+    const user = await syncSupabaseUserAsync(authUser, name.trim(), cleanUsername);
     const token = session?.access_token || generateToken(user.id);
     return { user, token };
   }
@@ -271,7 +343,7 @@ export async function login(
   // If Supabase is configured and input is an email, use Supabase Auth
   if (isSupabaseConfigured() && process.env.NODE_ENV !== 'test' && emailOrUsername.includes('@')) {
     const { authUser, token } = await supabaseSignIn(emailOrUsername.trim(), password || '');
-    const user = syncSupabaseUser(authUser);
+    const user = await syncSupabaseUserAsync(authUser);
     return { user, token };
   }
 

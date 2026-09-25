@@ -1,4 +1,4 @@
-import { Router, Response } from 'express';
+import { Router, type Response } from 'express';
 import {
   sendRequest,
   acceptRequest,
@@ -9,7 +9,7 @@ import {
   getUserRelationships,
   getMutualPartnerIds,
 } from '../services/relationshipService.ts';
-import { authMiddleware, AuthenticatedRequest } from '../middleware/authMiddleware.ts';
+import { authMiddleware, type AuthenticatedRequest } from '../middleware/authMiddleware.ts';
 
 export const relationshipRouter = Router();
 

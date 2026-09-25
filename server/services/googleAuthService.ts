@@ -17,9 +17,9 @@ import {
   getUserById,
   getUserByUsername,
   generateToken,
-  SanitizedUser,
+  type SanitizedUser,
   sanitizeUser,
-  UserRow,
+  type UserRow,
 } from './authService.ts';
 
 export interface GoogleUserInfo {

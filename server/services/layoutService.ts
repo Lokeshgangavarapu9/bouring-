@@ -1,11 +1,11 @@
 import { db } from '../db/database.ts';
-import { SanitizedUser, getUserById } from './authService.ts';
-import { constructEgoGraph, ConstructedGraph } from './graphConstructionService.ts';
+import { type SanitizedUser, getUserById } from './authService.ts';
+import { constructEgoGraph, type ConstructedGraph } from './graphConstructionService.ts';
 import { buildEgoGraph } from './graphAnalysisService.ts';
-import { classifyStructure, StructureClassification } from './structureClassificationService.ts';
-import { generateLayoutStrategy, LayoutStrategyCandidate } from './aiLayoutStrategyService.ts';
-import { score3DLayout, LayoutScoreResult } from './layoutScoringService.ts';
-import { defaultOptimizer, LayoutOptimizer } from './optimizationService.ts';
+import { classifyStructure, type StructureClassification } from './structureClassificationService.ts';
+import { generateLayoutStrategy, type LayoutStrategyCandidate } from './aiLayoutStrategyService.ts';
+import { score3DLayout, type LayoutScoreResult } from './layoutScoringService.ts';
+import { defaultOptimizer, type LayoutOptimizer } from './optimizationService.ts';
 import { getCachedLayout, saveCachedLayout } from './cacheService.ts';
 
 export const ALGORITHM_VERSION = 'boring-pipeline-v1';

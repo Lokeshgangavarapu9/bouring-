@@ -1,9 +1,9 @@
-import { Router, Response } from 'express';
+import { Router, type Response } from 'express';
 import { getOrComputeLayoutAsync } from '../services/layoutService.ts';
 import { buildEgoGraph } from '../services/graphAnalysisService.ts';
 import { classifyStructure } from '../services/structureClassificationService.ts';
 import { getMutualPartnerIds, getUserRelationships } from '../services/relationshipService.ts';
-import { authMiddleware, optionalAuthMiddleware, AuthenticatedRequest } from '../middleware/authMiddleware.ts';
+import { authMiddleware, optionalAuthMiddleware, type AuthenticatedRequest } from '../middleware/authMiddleware.ts';
 import { getAllUsers } from '../services/authService.ts';
 
 export const networkRouter = Router();

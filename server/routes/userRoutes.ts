@@ -1,4 +1,4 @@
-import { Router, Response } from 'express';
+import { Router, type Response } from 'express';
 import {
   getAuthorizedSocialProfile,
   updateProfile,
@@ -10,7 +10,7 @@ import {
 } from '../services/profileService.ts';
 import { processSocialLink } from '../services/socialLinkService.ts';
 import { getUserById } from '../services/authService.ts';
-import { authMiddleware, optionalAuthMiddleware, AuthenticatedRequest } from '../middleware/authMiddleware.ts';
+import { authMiddleware, optionalAuthMiddleware, type AuthenticatedRequest } from '../middleware/authMiddleware.ts';
 
 export const userRouter = Router();
 

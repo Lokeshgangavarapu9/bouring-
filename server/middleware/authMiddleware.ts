@@ -1,5 +1,5 @@
-import { Request, Response, NextFunction } from 'express';
-import { verifyToken, getUserById, SanitizedUser } from '../services/authService.ts';
+import type { Request, Response, NextFunction } from 'express';
+import { verifyToken, getUserById, type SanitizedUser } from '../services/authService.ts';
 
 export interface AuthenticatedRequest extends Request {
   userId?: string;

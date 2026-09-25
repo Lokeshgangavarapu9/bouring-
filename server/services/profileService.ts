@@ -1,6 +1,6 @@
 import { db, transaction } from '../db/database.ts';
 import { isMutual } from './relationshipService.ts';
-import { getUserById, SanitizedUser } from './authService.ts';
+import { getUserById, type SanitizedUser } from './authService.ts';
 import { processSocialLink } from './socialLinkService.ts';
 
 export interface PrivacySettingsRow {
