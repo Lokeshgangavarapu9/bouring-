@@ -49,7 +49,7 @@ async function runTests() {
   const testTimestamp = Date.now();
   const testEmail = `tester-${testTimestamp}@example.com`;
   const testUsername = `user_${testTimestamp}`;
-  const { user: createdUser, token } = await signup('Test Subject', testUsername, testEmail, 'securePass123');
+  const { user: createdUser, token } = await signup('Test Subject', testUsername, testEmail, 'securePass123', '1998-04-12');
   assert(createdUser.username === testUsername, 'User signup creates valid account');
   assert(Boolean(token && token.length > 20), 'Signup returns signed JWT');
 
@@ -182,10 +182,10 @@ async function runTests() {
 
   // Create test users A, B, C, D
   const testPrefix = `iso_${Date.now()}`;
-  const uA = (await signup('Alpha', `${testPrefix}_a`, `${testPrefix}_a@test.com`, 'pass123')).user;
-  const uB = (await signup('Beta', `${testPrefix}_b`, `${testPrefix}_b@test.com`, 'pass123')).user;
-  const uC = (await signup('Gamma', `${testPrefix}_c`, `${testPrefix}_c@test.com`, 'pass123')).user;
-  const uD = (await signup('Delta', `${testPrefix}_d`, `${testPrefix}_d@test.com`, 'pass123')).user;
+  const uA = (await signup('Alpha', `${testPrefix}_a`, `${testPrefix}_a@test.com`, 'pass123', '1995-01-01')).user;
+  const uB = (await signup('Beta', `${testPrefix}_b`, `${testPrefix}_b@test.com`, 'pass123', '1995-02-02')).user;
+  const uC = (await signup('Gamma', `${testPrefix}_c`, `${testPrefix}_c@test.com`, 'pass123', '1995-03-03')).user;
+  const uD = (await signup('Delta', `${testPrefix}_d`, `${testPrefix}_d@test.com`, 'pass123', '1995-04-04')).user;
 
   // A <-> B (MUTUAL)
   const reqAB = sendRequest(uA.id, uB.id);
@@ -360,13 +360,13 @@ async function runTests() {
   const {
     getPublicSupabaseConfig,
     isSupabaseConfigured,
-    supabaseRequestPasswordReset,
   } = await import('../services/supabaseService.ts');
   const {
     syncSupabaseUser,
     verifyToken: verifyAuthToken,
     getUserByEmail: getEmailUser,
     getUserByUsername: getUsernameUser,
+    verifyRecovery,
   } = await import('../services/authService.ts');
   const { getDatabaseAdapter } = await import('../db/adapter.ts');
 
@@ -406,7 +406,7 @@ async function runTests() {
   // Test 5: Duplicate account prevention
   let dupEmailPrevented = false;
   try {
-    await signup('Duplicate Subject', `unique_${Date.now()}`, mockSupabaseEmail, 'pass123456');
+    await signup('Duplicate Subject', `unique_${Date.now()}`, mockSupabaseEmail, 'pass123456', '1995-05-05');
   } catch (err: any) {
     dupEmailPrevented = err.message.includes('already registered');
   }
@@ -414,7 +414,7 @@ async function runTests() {
 
   let dupUsernamePrevented = false;
   try {
-    await signup('Duplicate Subject', mappedUser.username, `another_${Date.now()}@example.com`, 'pass123456');
+    await signup('Duplicate Subject', mappedUser.username, `another_${Date.now()}@example.com`, 'pass123456', '1995-05-05');
   } catch (err: any) {
     dupUsernamePrevented = err.message.includes('already taken');
   }
@@ -429,12 +429,17 @@ async function runTests() {
 
   // Test 7: Forgot password request flow & safety
   // Generic safe response: never leak account existence
-  const resetRequest1 = await supabaseRequestPasswordReset(mockSupabaseEmail);
-  assert(resetRequest1.success === true, 'Forgot password request succeeds for valid email');
-  assert(resetRequest1.message.includes('If an account exists'), 'Forgot password does not leak account existence');
+  const resetRequest1 = await verifyRecovery(testEmail, '1998-04-12', '127.0.0.1');
+  assert(resetRequest1.success === true, 'Forgot password request succeeds for valid email + DOB');
+  assert(Boolean(resetRequest1.resetToken), 'Forgot password returns resetToken without logging user in');
 
-  const resetRequestUnknown = await supabaseRequestPasswordReset('completely-unknown-user-999@domain.com');
-  assert(resetRequestUnknown.success === true, 'Forgot password for non-existent email returns identical safe response');
+  let unknownUserCaught = false;
+  try {
+    await verifyRecovery('completely-unknown-user-999@domain.com', '1998-04-12', '127.0.0.1');
+  } catch (err: any) {
+    unknownUserCaught = err.message === 'Unable to verify your account information.';
+  }
+  assert(unknownUserCaught, 'Forgot password for non-existent email returns safe generic response');
 
   // Test 8: Password Reset Validation Rules
   const validateReset = (pwd: string, confirm: string) => {

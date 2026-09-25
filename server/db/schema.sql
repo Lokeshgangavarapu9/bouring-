@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS users (
   molecule_smoky INTEGER DEFAULT 0,
   molecule_twinkling INTEGER DEFAULT 0,
   showcase_suggestions TEXT DEFAULT '[]',
+  date_of_birth TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );

@@ -1,11 +1,13 @@
 import { Router, type Response } from 'express';
-import { signup, login, getAllUsersAsync, getUserByIdAsync } from '../services/authService.ts';
 import {
-  getPublicSupabaseConfig,
-  supabaseRequestPasswordReset,
-  supabaseUpdatePassword,
-  isSupabaseConfigured,
-} from '../services/supabaseService.ts';
+  signup,
+  login,
+  verifyRecovery,
+  resetPasswordWithRecovery,
+  getAllUsersAsync,
+  getUserByIdAsync,
+} from '../services/authService.ts';
+import { getPublicSupabaseConfig } from '../services/supabaseService.ts';
 import { authMiddleware, type AuthenticatedRequest } from '../middleware/authMiddleware.ts';
 
 export const authRouter = Router();
@@ -16,14 +18,18 @@ authRouter.get('/supabase-config', (_req, res) => {
   res.json(config);
 });
 
-// POST /api/auth/signup - Email/Password Account Creation
+// POST /api/auth/signup - Email/Password/DOB Account Creation
 authRouter.post('/signup', async (req, res) => {
   try {
-    const { name, username, email, password } = req.body;
+    const { name, username, email, password, dateOfBirth, dob } = req.body;
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required' });
     }
-    const result = await signup(name, username, email, password);
+    const birthDate = dateOfBirth || dob;
+    if (!birthDate) {
+      return res.status(400).json({ error: 'Date of birth is required' });
+    }
+    const result = await signup(name, username, email, password, birthDate);
     res.status(201).json(result);
   } catch (err: any) {
     res.status(400).json({ error: err.message || 'Signup failed' });
@@ -45,60 +51,54 @@ authRouter.post('/login', async (req, res) => {
   }
 });
 
-// POST /api/auth/forgot-password - Trigger Supabase Password Reset Email
+// POST /api/auth/forgot-password - Step 1: Verify Email + Date of Birth for Account Recovery
 authRouter.post('/forgot-password', async (req, res) => {
   try {
-    const { email, redirectTo } = req.body;
+    const { email, dateOfBirth, dob } = req.body;
+    const birthDate = dateOfBirth || dob;
     if (!email || typeof email !== 'string' || !email.includes('@')) {
-      return res.status(400).json({ error: 'A valid email address is required' });
+      return res.status(400).json({ error: 'Unable to verify your account information.' });
+    }
+    if (!birthDate || typeof birthDate !== 'string') {
+      return res.status(400).json({ error: 'Unable to verify your account information.' });
     }
 
-    if (isSupabaseConfigured()) {
-      const result = await supabaseRequestPasswordReset(email.trim(), redirectTo);
-      return res.json(result);
-    }
-
-    // Local development fallback: Safe response that does not leak user existence
-    res.json({
-      success: true,
-      message: 'If an account exists with this email address, a password reset link has been sent.',
-    });
+    const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() || req.socket?.remoteAddress || 'unknown';
+    const result = await verifyRecovery(email.trim(), birthDate.trim(), clientIp);
+    res.json(result);
   } catch (err: any) {
-    // Return generic message even on error to prevent user enumeration
-    res.json({
-      success: true,
-      message: 'If an account exists with this email address, a password reset link has been sent.',
+    // Return safe generic message without leaking account existence
+    res.status(400).json({
+      error: err.message || 'Unable to verify your account information.',
     });
   }
 });
 
-// POST /api/auth/reset-password - Update User Password with Supabase Reset Token
+// POST /api/auth/reset-password - Step 2: Reset Password with Verified Recovery Token
 authRouter.post('/reset-password', async (req, res) => {
   try {
-    const { password, confirmPassword, accessToken } = req.body;
+    const { password, newPassword, confirmPassword, resetToken, accessToken, token } = req.body;
+    const targetPassword = newPassword || password;
+    const targetToken = resetToken || token || accessToken;
 
-    if (!password) {
+    if (!targetPassword) {
       return res.status(400).json({ error: 'New password is required' });
     }
 
-    if (password.length < 6) {
+    if (targetPassword.length < 6) {
       return res.status(400).json({ error: 'Password must be at least 6 characters' });
     }
 
-    if (confirmPassword && password !== confirmPassword) {
+    if (confirmPassword && targetPassword !== confirmPassword) {
       return res.status(400).json({ error: 'Passwords do not match' });
     }
 
-    if (isSupabaseConfigured() && accessToken) {
-      const result = await supabaseUpdatePassword(accessToken, password);
-      return res.json(result);
+    if (!targetToken) {
+      return res.status(400).json({ error: 'Reset token is required or has expired' });
     }
 
-    // Local development fallback
-    res.json({
-      success: true,
-      message: 'Password successfully updated. You can now sign in with your new password.',
-    });
+    const result = await resetPasswordWithRecovery(targetToken, targetPassword);
+    res.json(result);
   } catch (err: any) {
     res.status(400).json({ error: err.message || 'Unable to reset password' });
   }

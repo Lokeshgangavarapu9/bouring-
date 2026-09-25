@@ -7,6 +7,7 @@ export interface UserEntity {
   username: string;
   email: string;
   password_hash: string;
+  date_of_birth?: string | null;
   avatar_url: string;
   bio: string;
   gender: string;
@@ -135,10 +136,10 @@ export class SqliteDatabaseAdapter implements BoringDatabaseAdapter {
   async createUser(user: UserEntity): Promise<UserEntity> {
     const stmt = db.prepare(`
       INSERT INTO users (
-        id, name, username, email, password_hash, avatar_url, bio, gender,
+        id, name, username, email, password_hash, date_of_birth, avatar_url, bio, gender,
         molecule_identity, molecule_smoky, molecule_twinkling, showcase_suggestions,
         created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     stmt.run(
       user.id,
@@ -146,13 +147,14 @@ export class SqliteDatabaseAdapter implements BoringDatabaseAdapter {
       user.username,
       user.email,
       user.password_hash,
-      user.avatar_url,
-      user.bio,
-      user.gender,
-      user.molecule_identity,
-      user.molecule_smoky,
-      user.molecule_twinkling,
-      user.showcase_suggestions,
+      user.date_of_birth || null,
+      user.avatar_url || '',
+      user.bio || '',
+      user.gender || '',
+      user.molecule_identity || 'default',
+      user.molecule_smoky || 0,
+      user.molecule_twinkling || 0,
+      user.showcase_suggestions || JSON.stringify([]),
       user.created_at,
       user.updated_at
     );
@@ -179,7 +181,8 @@ export class SqliteDatabaseAdapter implements BoringDatabaseAdapter {
     const merged = { ...existing, ...updates, updated_at: new Date().toISOString() };
     const stmt = db.prepare(`
       UPDATE users SET
-        name = ?, username = ?, avatar_url = ?, bio = ?, gender = ?,
+        name = ?, username = ?, email = ?, password_hash = ?, date_of_birth = ?,
+        avatar_url = ?, bio = ?, gender = ?,
         molecule_identity = ?, molecule_smoky = ?, molecule_twinkling = ?,
         showcase_suggestions = ?, updated_at = ?
       WHERE id = ?
@@ -187,6 +190,9 @@ export class SqliteDatabaseAdapter implements BoringDatabaseAdapter {
     stmt.run(
       merged.name,
       merged.username,
+      merged.email,
+      merged.password_hash,
+      merged.date_of_birth || null,
       merged.avatar_url,
       merged.bio,
       merged.gender,
@@ -442,12 +448,22 @@ export class SupabaseDatabaseAdapter implements BoringDatabaseAdapter {
   }
 
   async createUser(user: UserEntity): Promise<UserEntity> {
-    const { data, error } = await this.getClient()
-      .from('users')
-      .insert(user)
-      .select()
-      .single();
-    if (error) throw new Error(error.message);
+    const payload: any = { ...user };
+    let data: any = null;
+    try {
+      const res = await this.getClient().from('users').insert(payload).select().single();
+      if (res.error) throw res.error;
+      data = res.data;
+    } catch (err: any) {
+      if (err.message && err.message.includes('date_of_birth')) {
+        const { date_of_birth, ...fallbackPayload } = payload;
+        const res = await this.getClient().from('users').insert(fallbackPayload).select().single();
+        if (res.error) throw new Error(res.error.message);
+        data = res.data;
+      } else {
+        throw new Error(err.message);
+      }
+    }
 
     // Initialize default privacy
     await this.getClient()
@@ -473,13 +489,22 @@ export class SupabaseDatabaseAdapter implements BoringDatabaseAdapter {
   }
 
   async updateUser(id: string, updates: Partial<UserEntity>): Promise<UserEntity> {
-    const { data, error } = await this.getClient()
-      .from('users')
-      .update({ ...updates, updated_at: new Date().toISOString() })
-      .eq('id', id)
-      .select()
-      .single();
-    if (error) throw new Error(error.message);
+    const payload: any = { ...updates, updated_at: new Date().toISOString() };
+    let data: any = null;
+    try {
+      const res = await this.getClient().from('users').update(payload).eq('id', id).select().single();
+      if (res.error) throw res.error;
+      data = res.data;
+    } catch (err: any) {
+      if (err.message && err.message.includes('date_of_birth')) {
+        const { date_of_birth, ...fallbackPayload } = payload;
+        const res = await this.getClient().from('users').update(fallbackPayload).eq('id', id).select().single();
+        if (res.error) throw new Error(res.error.message);
+        data = res.data;
+      } else {
+        throw new Error(err.message);
+      }
+    }
     return data as UserEntity;
   }
 

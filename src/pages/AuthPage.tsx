@@ -3,11 +3,12 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
 import { Sparkles, ArrowRight, AlertCircle, CheckCircle2, ArrowLeft } from 'lucide-react';
+import { DatePicker } from '../components/common/DatePicker';
 
 export const AuthPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { login, signup, isAuthenticated, loading: authLoading } = useAuth();
+  const { login, signup, isAuthenticated, loading: authLoading, setAuthSession } = useAuth();
 
   const rawDest = (location.state as any)?.from?.pathname;
   const destination = rawDest === '/dashboard' ? '/profile' : rawDest || '/profile';
@@ -17,6 +18,14 @@ export const AuthPage: React.FC = () => {
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
   const [username, setUsername] = useState('');
+  const [dateOfBirth, setDateOfBirth] = useState('');
+  
+  // Two-step recovery state
+  const [recoveryStep, setRecoveryStep] = useState<1 | 2>(1);
+  const [resetToken, setResetToken] = useState<string | null>(null);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+
   const [loading, setLoading] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
@@ -28,8 +37,38 @@ export const AuthPage: React.FC = () => {
     }
   }, [isAuthenticated, authLoading, destination, navigate]);
 
+  const isDobValid = (dob: string): boolean => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dob)) return false;
+    const [y, m, d] = dob.split('-').map(Number);
+    const date = new Date(y, m - 1, d);
+    if (isNaN(date.getTime()) || date.getFullYear() !== y || date.getMonth() !== m - 1 || date.getDate() !== d) {
+      return false;
+    }
+    const today = new Date();
+    today.setHours(23, 59, 59, 999);
+    return y >= 1900 && date <= today;
+  };
+
   const validate = (): boolean => {
     const errs: { [key: string]: string } = {};
+
+    // In recovery step 2, email and DOB are already verified
+    if (mode === 'forgot' && recoveryStep === 2) {
+      if (!newPassword) {
+        errs.newPassword = 'New password is required.';
+      } else if (newPassword.length < 6) {
+        errs.newPassword = 'Password must be at least 6 characters.';
+      }
+
+      if (!confirmPassword) {
+        errs.confirmPassword = 'Confirm your new password.';
+      } else if (newPassword !== confirmPassword) {
+        errs.confirmPassword = 'Passwords do not match.';
+      }
+
+      setErrors(errs);
+      return Object.keys(errs).length === 0;
+    }
 
     // Email validation
     const emailTrimmed = email.trim();
@@ -40,7 +79,7 @@ export const AuthPage: React.FC = () => {
     }
 
     // Password validation (only for signin/signup)
-    if (mode !== 'forgot') {
+    if (mode === 'signin' || mode === 'signup') {
       if (!password) {
         errs.password = 'Password is required.';
       } else if (password.length < 6) {
@@ -65,6 +104,21 @@ export const AuthPage: React.FC = () => {
       } else if (!/^[a-z0-9_]+$/.test(userTrimmed)) {
         errs.username = 'Only letters, numbers, and underscores are allowed.';
       }
+
+      // Date of Birth validation
+      if (!dateOfBirth) {
+        errs.dateOfBirth = 'Date of birth is required.';
+      } else if (!isDobValid(dateOfBirth)) {
+        errs.dateOfBirth = 'Please select a valid date of birth between 1900 and today.';
+      }
+    }
+
+    if (mode === 'forgot' && recoveryStep === 1) {
+      if (!dateOfBirth) {
+        errs.dateOfBirth = 'Date of birth is required.';
+      } else if (!isDobValid(dateOfBirth)) {
+        errs.dateOfBirth = 'Please select a valid date of birth between 1900 and today.';
+      }
     }
 
     setErrors(errs);
@@ -82,14 +136,36 @@ export const AuthPage: React.FC = () => {
         await login(email.trim(), password);
         navigate(destination, { replace: true });
       } else if (mode === 'signup') {
-        await signup(name.trim(), username.trim(), email.trim(), password);
+        await signup(name.trim(), username.trim(), email.trim(), password, dateOfBirth);
         navigate(destination, { replace: true });
       } else if (mode === 'forgot') {
-        const res = await api.auth.forgotPassword(email.trim());
-        setSuccessMessage(res.message || 'If an account exists with this email address, a password reset link has been sent.');
+        if (recoveryStep === 1) {
+          const res = await api.auth.forgotPassword(email.trim(), dateOfBirth);
+          if (res.resetToken) {
+            setResetToken(res.resetToken);
+            setRecoveryStep(2);
+            setSuccessMessage(res.message || 'Recovery information verified. Please create your new password.');
+          } else {
+            setSuccessMessage(res.message || 'If the information matches our records, you will be able to reset your password.');
+          }
+        } else if (recoveryStep === 2) {
+          if (!resetToken) {
+            throw new Error('Recovery session has expired. Please verify your information again.');
+          }
+          const res = await api.auth.resetPassword(newPassword, confirmPassword, resetToken);
+          if (res.token && res.user) {
+            setAuthSession(res.token, res.user);
+            navigate(destination, { replace: true });
+          } else {
+            setSuccessMessage('Your password has been securely updated. You can now sign in.');
+            setMode('signin');
+            setRecoveryStep(1);
+            setPassword('');
+          }
+        }
       }
     } catch (err: any) {
-      setErrors({ form: err.message || 'Authentication request failed. Please check your credentials.' });
+      setErrors({ form: err.message || 'Authentication request failed. Please check your information.' });
     } finally {
       setLoading(false);
     }
@@ -108,11 +184,13 @@ export const AuthPage: React.FC = () => {
           <h2 className="mt-4 text-2xl font-light tracking-tight text-slate-900">
             {mode === 'signin' && 'Sign in to Boring'}
             {mode === 'signup' && 'Create your Boring account'}
-            {mode === 'forgot' && 'Reset your password'}
+            {mode === 'forgot' && (recoveryStep === 1 ? 'Forgot your password?' : 'Create New Password')}
           </h2>
           <p className="mt-1.5 text-xs text-slate-500">
             {mode === 'forgot'
-              ? 'Enter your email address to receive a secure password reset link'
+              ? (recoveryStep === 1
+                  ? 'Enter your email address and date of birth to verify your account.'
+                  : 'Enter and confirm your new secure password.')
               : 'Explore your social relationships as an interactive 3D molecular structure'}
           </p>
         </div>
@@ -125,6 +203,7 @@ export const AuthPage: React.FC = () => {
                 type="button"
                 onClick={() => {
                   setMode('signin');
+                  setRecoveryStep(1);
                   setErrors({});
                   setSuccessMessage('');
                 }}
@@ -138,6 +217,7 @@ export const AuthPage: React.FC = () => {
                 type="button"
                 onClick={() => {
                   setMode('signup');
+                  setRecoveryStep(1);
                   setErrors({});
                   setSuccessMessage('');
                 }}
@@ -153,14 +233,18 @@ export const AuthPage: React.FC = () => {
               <button
                 type="button"
                 onClick={() => {
-                  setMode('signin');
+                  if (recoveryStep === 2) {
+                    setRecoveryStep(1);
+                  } else {
+                    setMode('signin');
+                  }
                   setErrors({});
                   setSuccessMessage('');
                 }}
                 className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-900 transition-colors"
               >
                 <ArrowLeft className="h-3.5 w-3.5" />
-                <span>Back to Sign In</span>
+                <span>{recoveryStep === 2 ? 'Back to Verification' : 'Back to Sign In'}</span>
               </button>
             </div>
           )}
@@ -173,6 +257,7 @@ export const AuthPage: React.FC = () => {
           )}
 
           <form onSubmit={handleSubmit} noValidate className="space-y-4">
+            {/* SIGN UP: Name & Username */}
             {mode === 'signup' && (
               <>
                 {/* Full Name */}
@@ -231,32 +316,34 @@ export const AuthPage: React.FC = () => {
               </>
             )}
 
-            {/* Email */}
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Email Address</label>
-              <div className="relative">
-                <input
-                  type="email"
-                  value={email}
-                  onChange={e => {
-                    setEmail(e.target.value);
-                    if (errors.email) setErrors(prev => ({ ...prev, email: '' }));
-                  }}
-                  placeholder="you@example.com"
-                  className={`w-full rounded-xl border bg-white/80 px-3.5 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-1 ${
-                    errors.email
-                      ? 'border-rose-300 focus:border-rose-500 focus:ring-rose-500'
-                      : 'border-slate-200 focus:border-indigo-500 focus:ring-indigo-500'
-                  }`}
-                />
+            {/* Email (Signin, Signup, and Recovery Step 1) */}
+            {(mode !== 'forgot' || recoveryStep === 1) && (
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Email Address</label>
+                <div className="relative">
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={e => {
+                      setEmail(e.target.value);
+                      if (errors.email) setErrors(prev => ({ ...prev, email: '' }));
+                    }}
+                    placeholder="you@example.com"
+                    className={`w-full rounded-xl border bg-white/80 px-3.5 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-1 ${
+                      errors.email
+                        ? 'border-rose-300 focus:border-rose-500 focus:ring-rose-500'
+                        : 'border-slate-200 focus:border-indigo-500 focus:ring-indigo-500'
+                    }`}
+                  />
+                </div>
+                {errors.email && (
+                  <p className="mt-1 flex items-center gap-1 text-[11px] text-rose-600">
+                    <AlertCircle className="h-3 w-3" />
+                    <span>{errors.email}</span>
+                  </p>
+                )}
               </div>
-              {errors.email && (
-                <p className="mt-1 flex items-center gap-1 text-[11px] text-rose-600">
-                  <AlertCircle className="h-3 w-3" />
-                  <span>{errors.email}</span>
-                </p>
-              )}
-            </div>
+            )}
 
             {/* Password (signin and signup only) */}
             {mode !== 'forgot' && (
@@ -268,6 +355,7 @@ export const AuthPage: React.FC = () => {
                       type="button"
                       onClick={() => {
                         setMode('forgot');
+                        setRecoveryStep(1);
                         setErrors({});
                         setSuccessMessage('');
                       }}
@@ -302,6 +390,93 @@ export const AuthPage: React.FC = () => {
               </div>
             )}
 
+            {/* Date of Birth: naturally below password on signup */}
+            {mode === 'signup' && (
+              <DatePicker
+                value={dateOfBirth}
+                onChange={val => {
+                  setDateOfBirth(val);
+                  if (errors.dateOfBirth) setErrors(prev => ({ ...prev, dateOfBirth: '' }));
+                }}
+                label="Date of Birth"
+                placeholder="Select your date of birth"
+                error={errors.dateOfBirth}
+                helperText="Used for secure account recovery. Never shared publicly."
+              />
+            )}
+
+            {/* Recovery Step 1: Date of Birth */}
+            {mode === 'forgot' && recoveryStep === 1 && (
+              <DatePicker
+                value={dateOfBirth}
+                onChange={val => {
+                  setDateOfBirth(val);
+                  if (errors.dateOfBirth) setErrors(prev => ({ ...prev, dateOfBirth: '' }));
+                }}
+                label="Date of Birth"
+                placeholder="Select your date of birth"
+                error={errors.dateOfBirth}
+                helperText="Enter the date of birth associated with your account"
+              />
+            )}
+
+            {/* Recovery Step 2: New Password & Confirm New Password */}
+            {mode === 'forgot' && recoveryStep === 2 && (
+              <>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">New Password</label>
+                  <div className="relative">
+                    <input
+                      type="password"
+                      value={newPassword}
+                      onChange={e => {
+                        setNewPassword(e.target.value);
+                        if (errors.newPassword) setErrors(prev => ({ ...prev, newPassword: '' }));
+                      }}
+                      placeholder="At least 6 characters"
+                      className={`w-full rounded-xl border bg-white/80 px-3.5 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-1 ${
+                        errors.newPassword
+                          ? 'border-rose-300 focus:border-rose-500 focus:ring-rose-500'
+                          : 'border-slate-200 focus:border-indigo-500 focus:ring-indigo-500'
+                      }`}
+                    />
+                  </div>
+                  {errors.newPassword && (
+                    <p className="mt-1 flex items-center gap-1 text-[11px] text-rose-600">
+                      <AlertCircle className="h-3 w-3" />
+                      <span>{errors.newPassword}</span>
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">Confirm New Password</label>
+                  <div className="relative">
+                    <input
+                      type="password"
+                      value={confirmPassword}
+                      onChange={e => {
+                        setConfirmPassword(e.target.value);
+                        if (errors.confirmPassword) setErrors(prev => ({ ...prev, confirmPassword: '' }));
+                      }}
+                      placeholder="Re-enter your new password"
+                      className={`w-full rounded-xl border bg-white/80 px-3.5 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-1 ${
+                        errors.confirmPassword
+                          ? 'border-rose-300 focus:border-rose-500 focus:ring-rose-500'
+                          : 'border-slate-200 focus:border-indigo-500 focus:ring-indigo-500'
+                      }`}
+                    />
+                  </div>
+                  {errors.confirmPassword && (
+                    <p className="mt-1 flex items-center gap-1 text-[11px] text-rose-600">
+                      <AlertCircle className="h-3 w-3" />
+                      <span>{errors.confirmPassword}</span>
+                    </p>
+                  )}
+                </div>
+              </>
+            )}
+
             {errors.form && (
               <div className="flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">
                 <AlertCircle className="h-4 w-4 shrink-0" />
@@ -321,7 +496,9 @@ export const AuthPage: React.FC = () => {
                   ? 'Sign In →'
                   : mode === 'signup'
                   ? 'Create Account →'
-                  : 'Send Reset Link →'}
+                  : recoveryStep === 1
+                  ? 'Verify Recovery Info →'
+                  : 'Reset Password & Sign In →'}
               </span>
               <ArrowRight className="h-4 w-4" />
             </button>
@@ -335,6 +512,7 @@ export const AuthPage: React.FC = () => {
           type="button"
           onClick={() => {
             setMode(mode === 'signin' ? 'signup' : 'signin');
+            setRecoveryStep(1);
             setErrors({});
             setSuccessMessage('');
           }}

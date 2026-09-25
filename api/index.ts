@@ -104,7 +104,8 @@ var init_database = __esm({
   );`,
       "CREATE INDEX IF NOT EXISTS idx_ext_identities_lookup ON external_identities(provider, provider_user_id);",
       "CREATE INDEX IF NOT EXISTS idx_ext_identities_user ON external_identities(user_id);",
-      "CREATE INDEX IF NOT EXISTS idx_social_profiles_user ON social_profiles(user_id);"
+      "CREATE INDEX IF NOT EXISTS idx_social_profiles_user ON social_profiles(user_id);",
+      "ALTER TABLE users ADD COLUMN date_of_birth TEXT;"
     ];
     _dbInstance = null;
     db = new Proxy({}, {
@@ -146,21 +147,6 @@ function getSupabaseAdminClient() {
   }
   return adminClient;
 }
-function getSupabaseAnonClient() {
-  const anonKey = getSupabaseAnonKey();
-  if (!isSupabaseConfigured() || !anonKey) {
-    return null;
-  }
-  if (!anonClient) {
-    anonClient = createClient(getSupabaseUrl(), anonKey, {
-      auth: {
-        autoRefreshToken: true,
-        persistSession: false
-      }
-    });
-  }
-  return anonClient;
-}
 function getPublicSupabaseConfig() {
   const url = getSupabaseUrl();
   const anonKey = getSupabaseAnonKey();
@@ -170,104 +156,7 @@ function getPublicSupabaseConfig() {
     anonKey: isSupabaseConfigured() ? anonKey || null : null
   };
 }
-async function supabaseSignUp(name, username, email, password) {
-  const client = getSupabaseAdminClient() || getSupabaseAnonClient();
-  if (!client) {
-    throw new Error("Supabase client is not configured.");
-  }
-  const { data, error } = await client.auth.signUp({
-    email,
-    password,
-    options: {
-      data: {
-        name,
-        username
-      }
-    }
-  });
-  if (error) {
-    throw new Error(error.message);
-  }
-  if (!data.user) {
-    throw new Error("Failed to create account through Supabase Auth.");
-  }
-  return {
-    authUser: data.user,
-    session: data.session
-  };
-}
-async function supabaseSignIn(email, password) {
-  const client = getSupabaseAdminClient() || getSupabaseAnonClient();
-  if (!client) {
-    throw new Error("Supabase client is not configured.");
-  }
-  const { data, error } = await client.auth.signInWithPassword({
-    email,
-    password
-  });
-  if (error) {
-    throw new Error(error.message || "Invalid email or password.");
-  }
-  if (!data.user || !data.session) {
-    throw new Error("Supabase authentication did not return an active session.");
-  }
-  return {
-    authUser: data.user,
-    token: data.session.access_token
-  };
-}
-async function supabaseRequestPasswordReset(email, redirectTo) {
-  const client = getSupabaseAdminClient() || getSupabaseAnonClient();
-  if (!client) {
-    return {
-      success: true,
-      message: "If an account exists with this email address, a password reset link has been sent."
-    };
-  }
-  const defaultRedirect = redirectTo || `${process.env.APP_URL || "http://localhost:5173"}/reset-password`;
-  const { error } = await client.auth.resetPasswordForEmail(email.trim(), {
-    redirectTo: defaultRedirect
-  });
-  if (error) {
-    console.warn("[Supabase Auth Warning] resetPasswordForEmail error:", error.message);
-  }
-  return {
-    success: true,
-    message: "If an account exists with this email address, a password reset link has been sent."
-  };
-}
-async function supabaseUpdatePassword(accessToken, newPassword) {
-  const url = getSupabaseUrl();
-  const anonKey = getSupabaseAnonKey();
-  if (!url || !anonKey) {
-    return {
-      success: true,
-      message: "Password successfully updated."
-    };
-  }
-  const userClient = createClient(url, anonKey, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false
-    },
-    global: {
-      headers: {
-        Authorization: `Bearer ${accessToken}`
-      }
-    }
-  });
-  const { error } = await userClient.auth.updateUser({
-    password: newPassword
-  });
-  if (error) {
-    throw new Error(error.message || "Unable to update password. Reset link may have expired.");
-  }
-  return {
-    success: true,
-    message: "Password successfully updated. You can now sign in with your new password."
-  };
-}
-var adminClient, anonClient;
+var adminClient;
 var init_supabaseService = __esm({
   "server/services/supabaseService.ts"() {
     "use strict";
@@ -276,7 +165,6 @@ var init_supabaseService = __esm({
     } catch {
     }
     adminClient = null;
-    anonClient = null;
   }
 });
 
@@ -346,10 +234,10 @@ var init_adapter = __esm({
       async createUser(user) {
         const stmt = db.prepare(`
       INSERT INTO users (
-        id, name, username, email, password_hash, avatar_url, bio, gender,
+        id, name, username, email, password_hash, date_of_birth, avatar_url, bio, gender,
         molecule_identity, molecule_smoky, molecule_twinkling, showcase_suggestions,
         created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
         stmt.run(
           user.id,
@@ -357,13 +245,14 @@ var init_adapter = __esm({
           user.username,
           user.email,
           user.password_hash,
-          user.avatar_url,
-          user.bio,
-          user.gender,
-          user.molecule_identity,
-          user.molecule_smoky,
-          user.molecule_twinkling,
-          user.showcase_suggestions,
+          user.date_of_birth || null,
+          user.avatar_url || "",
+          user.bio || "",
+          user.gender || "",
+          user.molecule_identity || "default",
+          user.molecule_smoky || 0,
+          user.molecule_twinkling || 0,
+          user.showcase_suggestions || JSON.stringify([]),
           user.created_at,
           user.updated_at
         );
@@ -383,7 +272,8 @@ var init_adapter = __esm({
         const merged = { ...existing, ...updates, updated_at: (/* @__PURE__ */ new Date()).toISOString() };
         const stmt = db.prepare(`
       UPDATE users SET
-        name = ?, username = ?, avatar_url = ?, bio = ?, gender = ?,
+        name = ?, username = ?, email = ?, password_hash = ?, date_of_birth = ?,
+        avatar_url = ?, bio = ?, gender = ?,
         molecule_identity = ?, molecule_smoky = ?, molecule_twinkling = ?,
         showcase_suggestions = ?, updated_at = ?
       WHERE id = ?
@@ -391,6 +281,9 @@ var init_adapter = __esm({
         stmt.run(
           merged.name,
           merged.username,
+          merged.email,
+          merged.password_hash,
+          merged.date_of_birth || null,
           merged.avatar_url,
           merged.bio,
           merged.gender,
@@ -602,8 +495,22 @@ var init_adapter = __esm({
         return data;
       }
       async createUser(user) {
-        const { data, error } = await this.getClient().from("users").insert(user).select().single();
-        if (error) throw new Error(error.message);
+        const payload = { ...user };
+        let data = null;
+        try {
+          const res = await this.getClient().from("users").insert(payload).select().single();
+          if (res.error) throw res.error;
+          data = res.data;
+        } catch (err) {
+          if (err.message && err.message.includes("date_of_birth")) {
+            const { date_of_birth, ...fallbackPayload } = payload;
+            const res = await this.getClient().from("users").insert(fallbackPayload).select().single();
+            if (res.error) throw new Error(res.error.message);
+            data = res.data;
+          } else {
+            throw new Error(err.message);
+          }
+        }
         await this.getClient().from("privacy_settings").upsert({
           user_id: user.id,
           profile_visibility: "PUBLIC",
@@ -619,8 +526,22 @@ var init_adapter = __esm({
         return data;
       }
       async updateUser(id, updates) {
-        const { data, error } = await this.getClient().from("users").update({ ...updates, updated_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", id).select().single();
-        if (error) throw new Error(error.message);
+        const payload = { ...updates, updated_at: (/* @__PURE__ */ new Date()).toISOString() };
+        let data = null;
+        try {
+          const res = await this.getClient().from("users").update(payload).eq("id", id).select().single();
+          if (res.error) throw res.error;
+          data = res.data;
+        } catch (err) {
+          if (err.message && err.message.includes("date_of_birth")) {
+            const { date_of_birth, ...fallbackPayload } = payload;
+            const res = await this.getClient().from("users").update(fallbackPayload).eq("id", id).select().single();
+            if (res.error) throw new Error(res.error.message);
+            data = res.data;
+          } else {
+            throw new Error(err.message);
+          }
+        }
         return data;
       }
       async getPrivacySettings(userId) {
@@ -791,24 +712,6 @@ async function getUserByIdAsync(id) {
   }
   return getUserById(id);
 }
-function getUserByEmail(email) {
-  try {
-    const stmt = db.prepare("SELECT * FROM users WHERE LOWER(email) = LOWER(?)");
-    const row = stmt.get(email);
-    return row || null;
-  } catch {
-    return null;
-  }
-}
-function getUserByUsername(username) {
-  try {
-    const stmt = db.prepare("SELECT * FROM users WHERE LOWER(username) = LOWER(?)");
-    const row = stmt.get(username);
-    return row || null;
-  } catch {
-    return null;
-  }
-}
 function getAllUsers() {
   try {
     const stmt = db.prepare("SELECT * FROM users ORDER BY created_at ASC");
@@ -851,220 +754,186 @@ function verifyToken(token) {
   }
   return null;
 }
-function syncSupabaseUser(authUser, fallbackName, fallbackUsername) {
-  const existing = getUserById(authUser.id);
-  if (existing) {
-    return existing;
+function validateDateOfBirth(dob) {
+  if (!dob || typeof dob !== "string" || !dob.trim()) {
+    throw new Error("Date of birth is required");
   }
-  const userEmail = (authUser.email || "").toLowerCase().trim();
-  if (userEmail) {
-    const byEmail = getUserByEmail(userEmail);
-    if (byEmail) {
-      return sanitizeUser(byEmail);
-    }
+  const trimmed = dob.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    throw new Error("Date of birth must be in YYYY-MM-DD format");
   }
-  const now = (/* @__PURE__ */ new Date()).toISOString();
-  const rawMeta = authUser.user_metadata || {};
-  const name = rawMeta.name || fallbackName || (userEmail ? userEmail.split("@")[0] : "Boring User");
-  const baseUsername = (rawMeta.username || fallbackUsername || (userEmail ? userEmail.split("@")[0] : "user")).toLowerCase().replace(/[^a-z0-9_]/g, "");
-  let username = baseUsername || `user_${Date.now()}`;
-  if (getUserByUsername(username)) {
-    username = `${username}_${Math.floor(1e3 + Math.random() * 9e3)}`;
+  const [yearStr, monthStr, dayStr] = trimmed.split("-");
+  const year = parseInt(yearStr, 10);
+  const month = parseInt(monthStr, 10);
+  const day = parseInt(dayStr, 10);
+  if (month < 1 || month > 12 || day < 1 || day > 31) {
+    throw new Error("Invalid date of birth");
   }
-  const insertUser = db.prepare(`
-    INSERT INTO users (
-      id, name, username, email, password_hash, avatar_url, bio, gender,
-      molecule_identity, molecule_smoky, molecule_twinkling, showcase_suggestions,
-      created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  insertUser.run(
-    authUser.id,
-    name,
-    username,
-    userEmail,
-    "",
-    "",
-    "",
-    "",
-    "default",
-    0,
-    0,
-    JSON.stringify([]),
-    now,
-    now
-  );
-  db.prepare(`
-    INSERT INTO privacy_settings (user_id, profile_visibility, email_visibility, social_links_visibility)
-    VALUES (?, 'PUBLIC', 'CONNECTIONS_ONLY', 'PUBLIC')
-  `).run(authUser.id);
-  db.prepare(`
-    INSERT INTO user_graph_versions (user_id, graph_version, updated_at)
-    VALUES (?, 1, ?)
-  `).run(authUser.id, now);
-  return getUserById(authUser.id);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (isNaN(date.getTime()) || date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
+    throw new Error("Invalid date of birth");
+  }
+  const today = /* @__PURE__ */ new Date();
+  const todayUtc = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()));
+  if (date > todayUtc) {
+    throw new Error("Date of birth cannot be in the future");
+  }
+  const minDate = new Date(Date.UTC(1900, 0, 1));
+  if (date < minDate) {
+    throw new Error("Date of birth cannot be before 1900");
+  }
+  return trimmed;
 }
-async function syncSupabaseUserAsync(authUser, fallbackName, fallbackUsername) {
-  const userEmail = (authUser.email || "").toLowerCase().trim();
-  const rawMeta = authUser.user_metadata || {};
-  const name = rawMeta.name || fallbackName || (userEmail ? userEmail.split("@")[0] : "Boring User");
-  const baseUsername = (rawMeta.username || fallbackUsername || (userEmail ? userEmail.split("@")[0] : "user")).toLowerCase().replace(/[^a-z0-9_]/g, "");
-  const now = (/* @__PURE__ */ new Date()).toISOString();
-  if (isSupabaseConfigured() && process.env.NODE_ENV !== "test") {
-    const admin = getSupabaseAdminClient();
-    if (admin) {
-      const { data: byId } = await admin.from("users").select("*").eq("id", authUser.id).maybeSingle();
-      if (byId) {
-        return sanitizeUser(byId);
-      }
-      if (userEmail) {
-        const { data: byEmail } = await admin.from("users").select("*").ilike("email", userEmail).maybeSingle();
-        if (byEmail) {
-          return sanitizeUser(byEmail);
-        }
-      }
-      let username = baseUsername || `user_${Date.now()}`;
-      const { data: byUname } = await admin.from("users").select("id").ilike("username", username).maybeSingle();
-      if (byUname) {
-        username = `${username}_${Math.floor(1e3 + Math.random() * 9e3)}`;
-      }
-      const newUser = {
-        id: authUser.id,
-        name,
-        username,
-        email: userEmail,
-        password_hash: "",
-        avatar_url: "",
-        bio: "",
-        gender: "",
-        molecule_identity: "default",
-        molecule_smoky: 0,
-        molecule_twinkling: 0,
-        showcase_suggestions: JSON.stringify([]),
-        created_at: now,
-        updated_at: now
-      };
-      await admin.from("users").upsert(newUser);
-      await admin.from("privacy_settings").upsert({
-        user_id: authUser.id,
-        profile_visibility: "PUBLIC",
-        email_visibility: "CONNECTIONS_ONLY",
-        social_links_visibility: "PUBLIC"
-      });
-      await admin.from("user_graph_versions").upsert({
-        user_id: authUser.id,
-        graph_version: 1,
-        updated_at: now
-      });
-      const sanitized = sanitizeUser(newUser);
-      userCache.set(authUser.id, sanitized);
-      return sanitized;
-    }
+function checkRecoveryRateLimit(key) {
+  const now = Date.now();
+  const windowMs = 15 * 60 * 1e3;
+  const maxAttempts = 5;
+  const record = recoveryRateLimitMap.get(key);
+  if (!record || now > record.resetTime) {
+    recoveryRateLimitMap.set(key, { count: 1, resetTime: now + windowMs });
+    return true;
   }
-  return syncSupabaseUser(authUser, fallbackName, fallbackUsername);
+  if (record.count >= maxAttempts) {
+    return false;
+  }
+  record.count += 1;
+  return true;
 }
-async function signup(name, username, email, password) {
+function resetRecoveryRateLimit(key) {
+  recoveryRateLimitMap.delete(key);
+}
+async function signup(name, username, email, password, dateOfBirth) {
   const cleanUsername = username.toLowerCase().replace(/[^a-z0-9_]/g, "");
   if (!name.trim()) throw new Error("Name is required");
   if (!cleanUsername) throw new Error("Valid username is required");
   if (!email.trim() || !email.includes("@")) throw new Error("Valid email is required");
-  const isProduction = Boolean("1");
-  const supabaseMode = isSupabaseConfigured() && process.env.NODE_ENV !== "test";
-  if (isProduction && !supabaseMode) {
-    throw new Error("Production database is not configured");
-  }
-  if (supabaseMode) {
-    const adapter = getDatabaseAdapter();
-    const existingEmail = await adapter.getUserByEmail(email.trim());
-    if (existingEmail) throw new Error("Email already registered");
-    const existingUsername = await adapter.getUserByUsername(cleanUsername);
-    if (existingUsername) throw new Error("Username already taken");
-    const { authUser, session } = await supabaseSignUp(name.trim(), cleanUsername, email.trim(), password || "password123");
-    const user2 = await syncSupabaseUserAsync(authUser, name.trim(), cleanUsername);
-    const token2 = session?.access_token || generateToken(user2.id);
-    return { user: user2, token: token2 };
-  }
-  if (getUserByEmail(email)) throw new Error("Email already registered");
-  if (getUserByUsername(cleanUsername)) throw new Error("Username already taken");
-  const passwordHash = bcrypt.hashSync(password || "password123", 10);
+  if (!password || password.length < 6) throw new Error("Password must be at least 6 characters");
+  const validDob = validateDateOfBirth(dateOfBirth);
+  const adapter = getDatabaseAdapter();
+  const existingEmail = await adapter.getUserByEmail(email.trim());
+  if (existingEmail) throw new Error("Email already registered");
+  const existingUsername = await adapter.getUserByUsername(cleanUsername);
+  if (existingUsername) throw new Error("Username already taken");
+  const passwordHash = bcrypt.hashSync(password, 10);
   const now = (/* @__PURE__ */ new Date()).toISOString();
-  const id = `user-${Date.now()}`;
-  const avatarUrl = "";
-  const insertUser = db.prepare(`
-    INSERT INTO users (
-      id, name, username, email, password_hash, avatar_url, bio, gender,
-      molecule_identity, molecule_smoky, molecule_twinkling, showcase_suggestions,
-      created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  insertUser.run(
+  const id = `user-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+  const userEntity = {
     id,
-    name.trim(),
-    cleanUsername,
-    email.toLowerCase().trim(),
-    passwordHash,
-    avatarUrl,
-    "",
-    "",
-    "default",
-    0,
-    0,
-    JSON.stringify([]),
-    now,
-    now
-  );
-  const insertPrivacy = db.prepare(`
-    INSERT INTO privacy_settings (user_id, profile_visibility, email_visibility, social_links_visibility)
-    VALUES (?, 'PUBLIC', 'CONNECTIONS_ONLY', 'PUBLIC')
-  `);
-  insertPrivacy.run(id);
-  const insertVersion = db.prepare(`
-    INSERT INTO user_graph_versions (user_id, graph_version, updated_at)
-    VALUES (?, 1, ?)
-  `);
-  insertVersion.run(id, now);
-  const user = getUserById(id);
+    name: name.trim(),
+    username: cleanUsername,
+    email: email.toLowerCase().trim(),
+    password_hash: passwordHash,
+    date_of_birth: validDob,
+    avatar_url: "",
+    bio: "",
+    gender: "",
+    molecule_identity: "default",
+    molecule_smoky: 0,
+    molecule_twinkling: 0,
+    showcase_suggestions: JSON.stringify([]),
+    created_at: now,
+    updated_at: now
+  };
+  const created = await adapter.createUser(userEntity);
+  const sanitized = sanitizeUser(created);
+  userCache.set(id, sanitized);
   const token = generateToken(id);
-  return { user, token };
+  return { user: sanitized, token };
 }
 async function login(emailOrUsername, password) {
   const identifier = emailOrUsername.trim();
   if (!identifier) {
     throw new Error("Email or username is required");
   }
-  const isProduction = Boolean("1");
-  const supabaseMode = isSupabaseConfigured() && process.env.NODE_ENV !== "test";
-  if (isProduction && !supabaseMode) {
-    throw new Error("Production database is not configured");
+  if (!password) {
+    throw new Error("Password is required");
   }
-  if (supabaseMode) {
-    let email = identifier;
-    if (!email.includes("@")) {
-      const adapter = getDatabaseAdapter();
-      const userByUname = await adapter.getUserByUsername(identifier);
-      if (!userByUname || !userByUname.email) {
-        throw new Error("Invalid credentials");
-      }
-      email = userByUname.email;
-    }
-    const { authUser, token: token2 } = await supabaseSignIn(email, password || "");
-    const user = await syncSupabaseUserAsync(authUser);
-    return { user, token: token2 };
+  const adapter = getDatabaseAdapter();
+  let user = null;
+  if (identifier.includes("@")) {
+    user = await adapter.getUserByEmail(identifier.toLowerCase());
+  } else {
+    user = await adapter.getUserByUsername(identifier.toLowerCase());
   }
-  let row = getUserByEmail(identifier);
-  if (!row) {
-    row = getUserByUsername(identifier);
-  }
-  if (!row) {
-    throw new Error("User not found");
-  }
-  if (password && row.password_hash && !bcrypt.compareSync(password, row.password_hash)) {
+  if (!user || !user.password_hash) {
     throw new Error("Invalid credentials");
   }
-  const token = generateToken(row.id);
-  return { user: sanitizeUser(row), token };
+  const match = bcrypt.compareSync(password, user.password_hash);
+  if (!match) {
+    throw new Error("Invalid credentials");
+  }
+  const token = generateToken(user.id);
+  const sanitized = sanitizeUser(user);
+  userCache.set(user.id, sanitized);
+  return { user: sanitized, token };
 }
-var userCache, JWT_SECRET;
+async function verifyRecovery(email, dateOfBirth, clientIp = "unknown") {
+  const cleanEmail = email?.trim().toLowerCase() || "";
+  const cleanDob = dateOfBirth?.trim() || "";
+  const rateLimitKey = `${clientIp}:${cleanEmail}`;
+  if (!checkRecoveryRateLimit(rateLimitKey)) {
+    throw new Error("Too many recovery attempts. Please try again later.");
+  }
+  if (!cleanEmail || !cleanDob) {
+    throw new Error("Unable to verify your account information.");
+  }
+  const adapter = getDatabaseAdapter();
+  const user = await adapter.getUserByEmail(cleanEmail);
+  if (!user || !user.date_of_birth) {
+    throw new Error("Unable to verify your account information.");
+  }
+  const userDob = user.date_of_birth.split("T")[0].trim();
+  const inputDob = cleanDob.split("T")[0].trim();
+  if (userDob !== inputDob) {
+    throw new Error("Unable to verify your account information.");
+  }
+  resetRecoveryRateLimit(rateLimitKey);
+  const resetToken = jwt.sign(
+    { userId: user.id, purpose: "pwd_reset" },
+    JWT_SECRET,
+    { expiresIn: "15m" }
+  );
+  return {
+    success: true,
+    resetToken,
+    message: "Account verified successfully. You may now create a new password."
+  };
+}
+async function resetPasswordWithRecovery(resetToken, newPassword) {
+  if (!resetToken) {
+    throw new Error("Reset token is required or expired.");
+  }
+  if (!newPassword || newPassword.length < 6) {
+    throw new Error("Password must be at least 6 characters.");
+  }
+  let decoded;
+  try {
+    decoded = jwt.verify(resetToken, JWT_SECRET);
+  } catch {
+    throw new Error("Reset token is invalid or has expired. Please verify your recovery details again.");
+  }
+  if (decoded.purpose !== "pwd_reset" || !decoded.userId) {
+    throw new Error("Invalid reset token.");
+  }
+  const adapter = getDatabaseAdapter();
+  const user = await adapter.getUserById(decoded.userId);
+  if (!user) {
+    throw new Error("User not found.");
+  }
+  const newHash = bcrypt.hashSync(newPassword, 10);
+  await adapter.updateUser(user.id, { password_hash: newHash });
+  userCache.delete(user.id);
+  const token = generateToken(user.id);
+  const updatedUser = await adapter.getUserById(user.id);
+  const sanitized = sanitizeUser(updatedUser || user);
+  return {
+    success: true,
+    message: "Password successfully updated. You can now sign in with your new password.",
+    user: sanitized,
+    token
+  };
+}
+var userCache, JWT_SECRET, recoveryRateLimitMap;
 var init_authService = __esm({
   "server/services/authService.ts"() {
     "use strict";
@@ -1073,6 +942,7 @@ var init_authService = __esm({
     init_supabaseService();
     userCache = /* @__PURE__ */ new Map();
     JWT_SECRET = process.env.JWT_SECRET || "boring-secret-key-2026-antigravity";
+    recoveryRateLimitMap = /* @__PURE__ */ new Map();
   }
 });
 
@@ -1591,11 +1461,15 @@ authRouter.get("/supabase-config", (_req, res) => {
 });
 authRouter.post("/signup", async (req, res) => {
   try {
-    const { name, username, email, password } = req.body;
+    const { name, username, email, password, dateOfBirth, dob } = req.body;
     if (!email || !password) {
       return res.status(400).json({ error: "Email and password are required" });
     }
-    const result = await signup(name, username, email, password);
+    const birthDate = dateOfBirth || dob;
+    if (!birthDate) {
+      return res.status(400).json({ error: "Date of birth is required" });
+    }
+    const result = await signup(name, username, email, password, birthDate);
     res.status(201).json(result);
   } catch (err) {
     res.status(400).json({ error: err.message || "Signup failed" });
@@ -1616,45 +1490,42 @@ authRouter.post("/login", async (req, res) => {
 });
 authRouter.post("/forgot-password", async (req, res) => {
   try {
-    const { email, redirectTo } = req.body;
+    const { email, dateOfBirth, dob } = req.body;
+    const birthDate = dateOfBirth || dob;
     if (!email || typeof email !== "string" || !email.includes("@")) {
-      return res.status(400).json({ error: "A valid email address is required" });
+      return res.status(400).json({ error: "Unable to verify your account information." });
     }
-    if (isSupabaseConfigured()) {
-      const result = await supabaseRequestPasswordReset(email.trim(), redirectTo);
-      return res.json(result);
+    if (!birthDate || typeof birthDate !== "string") {
+      return res.status(400).json({ error: "Unable to verify your account information." });
     }
-    res.json({
-      success: true,
-      message: "If an account exists with this email address, a password reset link has been sent."
-    });
+    const clientIp = req.headers["x-forwarded-for"]?.split(",")[0].trim() || req.socket?.remoteAddress || "unknown";
+    const result = await verifyRecovery(email.trim(), birthDate.trim(), clientIp);
+    res.json(result);
   } catch (err) {
-    res.json({
-      success: true,
-      message: "If an account exists with this email address, a password reset link has been sent."
+    res.status(400).json({
+      error: err.message || "Unable to verify your account information."
     });
   }
 });
 authRouter.post("/reset-password", async (req, res) => {
   try {
-    const { password, confirmPassword, accessToken } = req.body;
-    if (!password) {
+    const { password, newPassword, confirmPassword, resetToken, accessToken, token } = req.body;
+    const targetPassword = newPassword || password;
+    const targetToken = resetToken || token || accessToken;
+    if (!targetPassword) {
       return res.status(400).json({ error: "New password is required" });
     }
-    if (password.length < 6) {
+    if (targetPassword.length < 6) {
       return res.status(400).json({ error: "Password must be at least 6 characters" });
     }
-    if (confirmPassword && password !== confirmPassword) {
+    if (confirmPassword && targetPassword !== confirmPassword) {
       return res.status(400).json({ error: "Passwords do not match" });
     }
-    if (isSupabaseConfigured() && accessToken) {
-      const result = await supabaseUpdatePassword(accessToken, password);
-      return res.json(result);
+    if (!targetToken) {
+      return res.status(400).json({ error: "Reset token is required or has expired" });
     }
-    res.json({
-      success: true,
-      message: "Password successfully updated. You can now sign in with your new password."
-    });
+    const result = await resetPasswordWithRecovery(targetToken, targetPassword);
+    res.json(result);
   } catch (err) {
     res.status(400).json({ error: err.message || "Unable to reset password" });
   }

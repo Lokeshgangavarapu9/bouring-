@@ -30,6 +30,7 @@ const safeMigrations = [
   'CREATE INDEX IF NOT EXISTS idx_ext_identities_lookup ON external_identities(provider, provider_user_id);',
   'CREATE INDEX IF NOT EXISTS idx_ext_identities_user ON external_identities(user_id);',
   'CREATE INDEX IF NOT EXISTS idx_social_profiles_user ON social_profiles(user_id);',
+  'ALTER TABLE users ADD COLUMN date_of_birth TEXT;',
 ];
 
 function createFallbackDb() {

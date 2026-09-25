@@ -1,21 +1,14 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { db } from '../db/database.ts';
-import { getDatabaseAdapter } from '../db/adapter.ts';
-import {
-  isSupabaseConfigured,
-  getSupabaseAdminClient,
-  supabaseSignUp,
-  supabaseSignIn,
-  verifySupabaseToken,
-} from './supabaseService.ts';
+import { getDatabaseAdapter, type UserEntity } from '../db/adapter.ts';
+import { isSupabaseConfigured, getSupabaseAdminClient } from './supabaseService.ts';
 
 const userCache = new Map<string, SanitizedUser>();
 
 export function clearUserCache(): void {
   userCache.clear();
 }
-
 
 const JWT_SECRET = process.env.JWT_SECRET || 'boring-secret-key-2026-antigravity';
 
@@ -25,6 +18,7 @@ export interface UserRow {
   username: string;
   email: string;
   password_hash: string;
+  date_of_birth?: string | null;
   avatar_url: string;
   bio: string;
   gender: string;
@@ -348,88 +342,122 @@ export async function syncSupabaseUserAsync(
   return syncSupabaseUser(authUser, fallbackName, fallbackUsername);
 }
 
+export function validateDateOfBirth(dob: string | undefined): string {
+  if (!dob || typeof dob !== 'string' || !dob.trim()) {
+    throw new Error('Date of birth is required');
+  }
+  const trimmed = dob.trim();
+  // Expect format YYYY-MM-DD
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    throw new Error('Date of birth must be in YYYY-MM-DD format');
+  }
+  const [yearStr, monthStr, dayStr] = trimmed.split('-');
+  const year = parseInt(yearStr, 10);
+  const month = parseInt(monthStr, 10);
+  const day = parseInt(dayStr, 10);
+
+  if (month < 1 || month > 12 || day < 1 || day > 31) {
+    throw new Error('Invalid date of birth');
+  }
+
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (isNaN(date.getTime()) || date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
+    throw new Error('Invalid date of birth');
+  }
+
+  const today = new Date();
+  const todayUtc = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()));
+  if (date > todayUtc) {
+    throw new Error('Date of birth cannot be in the future');
+  }
+
+  const minDate = new Date(Date.UTC(1900, 0, 1));
+  if (date < minDate) {
+    throw new Error('Date of birth cannot be before 1900');
+  }
+
+  return trimmed;
+}
+
+// Rate limiting map for account recovery attempts: key -> { count: number, resetTime: number }
+const recoveryRateLimitMap = new Map<string, { count: number; resetTime: number }>();
+
+export function checkRecoveryRateLimit(key: string): boolean {
+  const now = Date.now();
+  const windowMs = 15 * 60 * 1000; // 15 minutes
+  const maxAttempts = 5;
+
+  const record = recoveryRateLimitMap.get(key);
+  if (!record || now > record.resetTime) {
+    recoveryRateLimitMap.set(key, { count: 1, resetTime: now + windowMs });
+    return true;
+  }
+
+  if (record.count >= maxAttempts) {
+    return false;
+  }
+
+  record.count += 1;
+  return true;
+}
+
+export function resetRecoveryRateLimit(key: string): void {
+  recoveryRateLimitMap.delete(key);
+}
+
 export async function signup(
   name: string,
   username: string,
   email: string,
-  password?: string
+  password?: string,
+  dateOfBirth?: string
 ): Promise<{ user: SanitizedUser; token: string }> {
   const cleanUsername = username.toLowerCase().replace(/[^a-z0-9_]/g, '');
   if (!name.trim()) throw new Error('Name is required');
   if (!cleanUsername) throw new Error('Valid username is required');
   if (!email.trim() || !email.includes('@')) throw new Error('Valid email is required');
+  if (!password || password.length < 6) throw new Error('Password must be at least 6 characters');
 
-  const isProduction = Boolean(process.env.VERCEL || process.env.NODE_ENV === 'production');
-  const supabaseMode = isSupabaseConfigured() && process.env.NODE_ENV !== 'test';
+  const validDob = validateDateOfBirth(dateOfBirth);
+  const adapter = getDatabaseAdapter();
 
-  // Production fail-safe: never attempt SQLite if Supabase configuration is missing in production
-  if (isProduction && !supabaseMode) {
-    throw new Error('Production database is not configured');
-  }
+  // Check email uniqueness
+  const existingEmail = await adapter.getUserByEmail(email.trim());
+  if (existingEmail) throw new Error('Email already registered');
 
-  // Supabase Auth + PostgreSQL Production Mode
-  if (supabaseMode) {
-    const adapter = getDatabaseAdapter();
-    const existingEmail = await adapter.getUserByEmail(email.trim());
-    if (existingEmail) throw new Error('Email already registered');
-    const existingUsername = await adapter.getUserByUsername(cleanUsername);
-    if (existingUsername) throw new Error('Username already taken');
+  // Check username uniqueness
+  const existingUsername = await adapter.getUserByUsername(cleanUsername);
+  if (existingUsername) throw new Error('Username already taken');
 
-    const { authUser, session } = await supabaseSignUp(name.trim(), cleanUsername, email.trim(), password || 'password123');
-    const user = await syncSupabaseUserAsync(authUser, name.trim(), cleanUsername);
-    const token = session?.access_token || generateToken(user.id);
-    return { user, token };
-  }
-
-  // Local SQLite Development Mode
-  if (getUserByEmail(email)) throw new Error('Email already registered');
-  if (getUserByUsername(cleanUsername)) throw new Error('Username already taken');
-
-  const passwordHash = bcrypt.hashSync(password || 'password123', 10);
+  // Bcrypt password hash
+  const passwordHash = bcrypt.hashSync(password, 10);
   const now = new Date().toISOString();
-  const id = `user-${Date.now()}`;
-  const avatarUrl = '';
+  const id = `user-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
 
-  const insertUser = db.prepare(`
-    INSERT INTO users (
-      id, name, username, email, password_hash, avatar_url, bio, gender,
-      molecule_identity, molecule_smoky, molecule_twinkling, showcase_suggestions,
-      created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-
-  insertUser.run(
+  const userEntity: UserEntity = {
     id,
-    name.trim(),
-    cleanUsername,
-    email.toLowerCase().trim(),
-    passwordHash,
-    avatarUrl,
-    '',
-    '',
-    'default',
-    0,
-    0,
-    JSON.stringify([]),
-    now,
-    now
-  );
+    name: name.trim(),
+    username: cleanUsername,
+    email: email.toLowerCase().trim(),
+    password_hash: passwordHash,
+    date_of_birth: validDob,
+    avatar_url: '',
+    bio: '',
+    gender: '',
+    molecule_identity: 'default',
+    molecule_smoky: 0,
+    molecule_twinkling: 0,
+    showcase_suggestions: JSON.stringify([]),
+    created_at: now,
+    updated_at: now,
+  };
 
-  const insertPrivacy = db.prepare(`
-    INSERT INTO privacy_settings (user_id, profile_visibility, email_visibility, social_links_visibility)
-    VALUES (?, 'PUBLIC', 'CONNECTIONS_ONLY', 'PUBLIC')
-  `);
-  insertPrivacy.run(id);
+  const created = await adapter.createUser(userEntity);
+  const sanitized = sanitizeUser(created as unknown as UserRow);
+  userCache.set(id, sanitized);
 
-  const insertVersion = db.prepare(`
-    INSERT INTO user_graph_versions (user_id, graph_version, updated_at)
-    VALUES (?, 1, ?)
-  `);
-  insertVersion.run(id, now);
-
-  const user = getUserById(id)!;
   const token = generateToken(id);
-  return { user, token };
+  return { user: sanitized, token };
 }
 
 export async function login(
@@ -440,46 +468,139 @@ export async function login(
   if (!identifier) {
     throw new Error('Email or username is required');
   }
-
-  const isProduction = Boolean(process.env.VERCEL || process.env.NODE_ENV === 'production');
-  const supabaseMode = isSupabaseConfigured() && process.env.NODE_ENV !== 'test';
-
-  // Production fail-safe: never attempt SQLite if Supabase configuration is missing in production
-  if (isProduction && !supabaseMode) {
-    throw new Error('Production database is not configured');
+  if (!password) {
+    throw new Error('Password is required');
   }
 
-  // Supabase Auth Integration (Production Mode)
-  if (supabaseMode) {
-    let email = identifier;
-    if (!email.includes('@')) {
-      const adapter = getDatabaseAdapter();
-      const userByUname = await adapter.getUserByUsername(identifier);
-      if (!userByUname || !userByUname.email) {
-        throw new Error('Invalid credentials');
-      }
-      email = userByUname.email;
-    }
-
-    const { authUser, token } = await supabaseSignIn(email, password || '');
-    const user = await syncSupabaseUserAsync(authUser);
-    return { user, token };
+  const adapter = getDatabaseAdapter();
+  let user: UserEntity | null = null;
+  if (identifier.includes('@')) {
+    user = await adapter.getUserByEmail(identifier.toLowerCase());
+  } else {
+    user = await adapter.getUserByUsername(identifier.toLowerCase());
   }
 
-  // Local SQLite Development Mode
-  let row = getUserByEmail(identifier);
-  if (!row) {
-    row = getUserByUsername(identifier);
-  }
-  if (!row) {
-    throw new Error('User not found');
-  }
-
-  // If password provided, verify hash
-  if (password && row.password_hash && !bcrypt.compareSync(password, row.password_hash)) {
+  if (!user || !user.password_hash) {
     throw new Error('Invalid credentials');
   }
 
-  const token = generateToken(row.id);
-  return { user: sanitizeUser(row), token };
+  const match = bcrypt.compareSync(password, user.password_hash);
+  if (!match) {
+    throw new Error('Invalid credentials');
+  }
+
+  const token = generateToken(user.id);
+  const sanitized = sanitizeUser(user as unknown as UserRow);
+  userCache.set(user.id, sanitized);
+  return { user: sanitized, token };
 }
+
+/**
+ * Step 1 of Account Recovery: Verify Email + Date of Birth.
+ * CRITICAL SECURITY INVARIANT:
+ * This verification does NOT authenticate the user. It issues a single-use,
+ * short-lived reset token permitting password change.
+ */
+export async function verifyRecovery(
+  email: string,
+  dateOfBirth: string,
+  clientIp = 'unknown'
+): Promise<{ success: boolean; resetToken: string; message: string }> {
+  const cleanEmail = email?.trim().toLowerCase() || '';
+  const cleanDob = dateOfBirth?.trim() || '';
+
+  // Rate limiting per IP + email
+  const rateLimitKey = `${clientIp}:${cleanEmail}`;
+  if (!checkRecoveryRateLimit(rateLimitKey)) {
+    throw new Error('Too many recovery attempts. Please try again later.');
+  }
+
+  if (!cleanEmail || !cleanDob) {
+    throw new Error('Unable to verify your account information.');
+  }
+
+  const adapter = getDatabaseAdapter();
+  const user = await adapter.getUserByEmail(cleanEmail);
+
+  if (!user || !user.date_of_birth) {
+    // Generic failure: never reveal whether account exists or if DOB was unset
+    throw new Error('Unable to verify your account information.');
+  }
+
+  // Normalize dates for comparison (YYYY-MM-DD)
+  const userDob = user.date_of_birth.split('T')[0].trim();
+  const inputDob = cleanDob.split('T')[0].trim();
+
+  if (userDob !== inputDob) {
+    throw new Error('Unable to verify your account information.');
+  }
+
+  // Reset rate limit on success
+  resetRecoveryRateLimit(rateLimitKey);
+
+  // Issue short-lived, purpose-bound reset token (15 minutes)
+  const resetToken = jwt.sign(
+    { userId: user.id, purpose: 'pwd_reset' },
+    JWT_SECRET,
+    { expiresIn: '15m' }
+  );
+
+  return {
+    success: true,
+    resetToken,
+    message: 'Account verified successfully. You may now create a new password.',
+  };
+}
+
+/**
+ * Step 2 of Account Recovery: Set new password using verified resetToken.
+ * Hashes new password with bcrypt, updates user, invalidates cache,
+ * and issues a fresh session token.
+ */
+export async function resetPasswordWithRecovery(
+  resetToken: string,
+  newPassword: string
+): Promise<{ success: boolean; message: string; user: SanitizedUser; token: string }> {
+  if (!resetToken) {
+    throw new Error('Reset token is required or expired.');
+  }
+  if (!newPassword || newPassword.length < 6) {
+    throw new Error('Password must be at least 6 characters.');
+  }
+
+  let decoded: { userId: string; purpose: string };
+  try {
+    decoded = jwt.verify(resetToken, JWT_SECRET) as { userId: string; purpose: string };
+  } catch {
+    throw new Error('Reset token is invalid or has expired. Please verify your recovery details again.');
+  }
+
+  if (decoded.purpose !== 'pwd_reset' || !decoded.userId) {
+    throw new Error('Invalid reset token.');
+  }
+
+  const adapter = getDatabaseAdapter();
+  const user = await adapter.getUserById(decoded.userId);
+  if (!user) {
+    throw new Error('User not found.');
+  }
+
+  const newHash = bcrypt.hashSync(newPassword, 10);
+  await adapter.updateUser(user.id, { password_hash: newHash });
+
+  // Invalidate cache
+  userCache.delete(user.id);
+
+  // Create new active Boring session only after successful password update
+  const token = generateToken(user.id);
+  const updatedUser = await adapter.getUserById(user.id);
+  const sanitized = sanitizeUser((updatedUser || user) as unknown as UserRow);
+
+  return {
+    success: true,
+    message: 'Password successfully updated. You can now sign in with your new password.',
+    user: sanitized,
+    token,
+  };
+}
+

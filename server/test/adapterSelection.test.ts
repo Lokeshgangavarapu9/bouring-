@@ -9,9 +9,8 @@ import {
 import {
   isSupabaseConfigured,
   getSupabaseAdminClient,
-  supabaseSignUp,
 } from '../services/supabaseService.ts';
-import { signup, syncSupabaseUserAsync } from '../services/authService.ts';
+import { signup } from '../services/authService.ts';
 
 // Save original environment
 const originalEnv = { ...process.env };
@@ -113,9 +112,9 @@ async function runAdapterSelectionTests() {
     console.log('✅ TEST 4 PASSED: SQLite is strictly prohibited on Vercel/production and clear error is thrown');
 
     // -------------------------------------------------------------
-    // TEST 5 & 6 & 7: Production signup flow & Supabase user sync
+    // TEST 5 & 6 & 7: Production signup flow & Supabase user persistence
     // -------------------------------------------------------------
-    console.log('\n--- TEST 5, 6, 7: Supabase-backed signup & user synchronization ---');
+    console.log('\n--- TEST 5, 6, 7: Supabase PostgreSQL-backed signup & persistence ---');
     // Restore real env from original (which includes real Supabase keys from .env if present)
     restoreEnv();
 
@@ -132,49 +131,31 @@ async function runAdapterSelectionTests() {
       const testEmail = `boringuser_${timestamp}@gmail.com`;
       const testUsername = `testuser_${timestamp}`;
       const testName = 'Production Test User';
+      const testDob = '1995-06-15';
 
-      console.log('Testing Supabase signup with dynamic test user...');
-      try {
-        const result = await signup(testName, testUsername, testEmail, 'StrongPass@2026!');
-        assert.ok(result.user, 'Signup should return user object');
-        assert.equal(result.user.email, testEmail, 'Returned user email must match signup input');
-        assert.equal(result.user.username, testUsername, 'Returned username must match signup input');
-        assert.ok(result.token, 'Signup should return session token');
-        console.log('✅ TEST 5 PASSED: POST /api/auth/signup routes through Supabase and does not invoke SQLite');
+      console.log('Testing Supabase signup with dynamic test user and date_of_birth...');
+      const result = await signup(testName, testUsername, testEmail, 'StrongPass@2026!', testDob);
+      assert.ok(result.user, 'Signup should return user object');
+      assert.equal(result.user.email, testEmail, 'Returned user email must match signup input');
+      assert.equal(result.user.username, testUsername, 'Returned username must match signup input');
+      assert.ok(result.token, 'Signup should return session token');
+      console.log('✅ TEST 5 PASSED: POST /api/auth/signup routes through Supabase adapter without SQLite');
 
-        // Test 6: Auth identity creation
-        assert.ok(result.user.id, 'Supabase Auth assigned a valid user UUID');
-        console.log('✅ TEST 6 PASSED: Supabase Auth user created successfully');
+      // Test 6: User record in Supabase public.users
+      const savedUser = await prodAdapter.getUserById(result.user.id);
+      assert.ok(savedUser !== null, 'User must exist in public.users table in Supabase');
+      assert.equal(savedUser.email, testEmail, 'public.users record must match email');
+      console.log('✅ TEST 6 PASSED: public.users record persisted in Supabase PostgreSQL');
 
-        // Test 7: Application user synchronization in public.users
-        const syncedUser = await prodAdapter.getUserById(result.user.id);
-        assert.ok(syncedUser !== null, 'User must exist in public.users table in Supabase');
-        assert.equal(syncedUser.email, testEmail, 'public.users record must match email');
-        console.log('✅ TEST 7 PASSED: public.users is correctly synchronized');
+      // Test 7: Sensitive date_of_birth is NOT returned in public profile/sanitized user
+      assert.equal((result.user as any).date_of_birth, undefined, 'date_of_birth must NOT be present on sanitized user');
+      console.log('✅ TEST 7 PASSED: date_of_birth is securely omitted from sanitized user object');
 
-        // Clean up test user in Supabase to keep table clean
-        const admin = getSupabaseAdminClient();
-        if (admin) {
-          await admin.from('users').delete().eq('id', result.user.id);
-          await admin.auth.admin.deleteUser(result.user.id);
-          console.log('🧹 Cleaned up dynamic test user from Supabase');
-        }
-      } catch (err: any) {
-        // If Supabase Auth rejects signup due to email confirmations, test sync directly
-        console.log('Supabase signup response:', err.message);
-        if (err.message.includes('rate limit') || err.message.includes('signups not allowed')) {
-          console.log('⚠️ Rate limit encountered on live Supabase auth, verifying direct synchronization...');
-          const fakeAuthUser = {
-            id: `test-uuid-${timestamp}`,
-            email: testEmail,
-            user_metadata: { name: testName, username: testUsername },
-          };
-          const synced = await syncSupabaseUserAsync(fakeAuthUser as any);
-          assert.equal(synced.id, fakeAuthUser.id);
-          console.log('✅ TEST 6 & 7 PASSED: Supabase user synchronization verified');
-        } else {
-          throw err;
-        }
+      // Clean up test user in Supabase to keep table clean
+      const admin = getSupabaseAdminClient();
+      if (admin) {
+        await admin.from('users').delete().eq('id', result.user.id);
+        console.log('🧹 Cleaned up dynamic test user from Supabase');
       }
     } else {
       console.log('ℹ️ Live Supabase not configured in current test run; unit tests verified adapter selection logic.');

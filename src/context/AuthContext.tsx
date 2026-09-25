@@ -13,9 +13,10 @@ interface AuthContextType {
   isAuthenticated: boolean;
   loading: boolean;
   login: (email: string, password?: string) => Promise<boolean>;
-  signup: (name: string, username: string, email: string, password?: string) => Promise<boolean>;
+  signup: (name: string, username: string, email: string, password?: string, dateOfBirth?: string) => Promise<boolean>;
   logout: () => void;
   switchUser: (userId: string) => Promise<void>;
+  setAuthSession: (token: string, user: User) => void;
   updateProfile: (updated: Partial<User>) => Promise<void>;
   updatePrivacySettings: (settings: Partial<PrivacySettings>) => Promise<void>;
 }
@@ -106,10 +107,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     name: string,
     username: string,
     email: string,
-    password?: string
+    password?: string,
+    dateOfBirth?: string
   ): Promise<boolean> => {
     try {
-      const res = await api.auth.signup(name, username, email, password || 'password123');
+      const res = await api.auth.signup(name, username, email, password || 'password123', dateOfBirth);
       if (res.token) {
         localStorage.setItem('boring_auth_token', res.token);
       }
@@ -125,6 +127,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.removeItem('boring_auth_token');
     localStorage.removeItem('molecule_current_user');
     setCurrentUser(null);
+  };
+
+  const setAuthSession = (token: string, user: User) => {
+    localStorage.setItem('boring_auth_token', token);
+    localStorage.setItem('molecule_current_user', JSON.stringify(user));
+    setCurrentUser(user);
   };
 
   const switchUser = async (userId: string) => {
@@ -179,6 +187,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         signup,
         logout,
         switchUser,
+        setAuthSession,
         updateProfile,
         updatePrivacySettings,
       }}

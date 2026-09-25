@@ -64,10 +64,10 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
 
 export const api = {
   auth: {
-    signup: (name: string, username: string, email: string, password?: string) =>
+    signup: (name: string, username: string, email: string, password?: string, dateOfBirth?: string) =>
       request<{ user: any; token: string }>('/auth/signup', {
         method: 'POST',
-        body: JSON.stringify({ name, username, email, password }),
+        body: JSON.stringify({ name, username, email, password, dateOfBirth }),
       }),
 
     login: (emailOrUsername: string, password?: string) =>
@@ -96,16 +96,16 @@ export const api = {
     getSupabaseConfig: () =>
       request<{ configured: boolean; supabaseUrl: string | null; anonKey: string | null }>('/auth/supabase-config'),
 
-    forgotPassword: (email: string, redirectTo?: string) =>
-      request<{ success: boolean; message: string }>('/auth/forgot-password', {
+    forgotPassword: (email: string, dateOfBirth: string) =>
+      request<{ success: boolean; resetToken: string; message: string }>('/auth/forgot-password', {
         method: 'POST',
-        body: JSON.stringify({ email, redirectTo }),
+        body: JSON.stringify({ email, dateOfBirth }),
       }),
 
-    resetPassword: (password: string, confirmPassword?: string, accessToken?: string) =>
-      request<{ success: boolean; message: string }>('/auth/reset-password', {
+    resetPassword: (password: string, confirmPassword?: string, resetToken?: string) =>
+      request<{ success: boolean; message: string; user?: any; token?: string }>('/auth/reset-password', {
         method: 'POST',
-        body: JSON.stringify({ password, confirmPassword, accessToken }),
+        body: JSON.stringify({ password, confirmPassword, resetToken }),
       }),
   },
 
