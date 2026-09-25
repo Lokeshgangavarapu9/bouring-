@@ -1,7 +1,7 @@
 import { db } from '../db/database.ts';
 import { getMutualPartnerIds } from './relationshipService.ts';
-import { buildEgoGraph, GraphMetrics } from './graphAnalysisService.ts';
-import { computeDeterministicGraphVersion, GraphSnapshot, GraphSummaryForAI } from './graphPipelineService.ts';
+import { buildEgoGraph, type GraphMetrics } from './graphAnalysisService.ts';
+import { computeDeterministicGraphVersion, type GraphSnapshot, type GraphSummaryForAI } from './graphPipelineService.ts';
 import { getUserById } from './authService.ts';
 
 /**

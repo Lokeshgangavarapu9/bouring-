@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { db } from '../db/database.ts';
-import { buildEgoGraph, GraphMetrics } from './graphAnalysisService.ts';
-import { constructEgoGraph, ConstructedGraph } from './graphConstructionService.ts';
+import { buildEgoGraph, type GraphMetrics } from './graphAnalysisService.ts';
+import { constructEgoGraph, type ConstructedGraph } from './graphConstructionService.ts';
 import { getUserById } from './authService.ts';
 import { getMutualPartnerIds } from './relationshipService.ts';
 

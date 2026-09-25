@@ -1,5 +1,5 @@
-import { ConstructedGraph } from './graphConstructionService.ts';
-import { StructureClassification } from './structureClassificationService.ts';
+import type { ConstructedGraph } from './graphConstructionService.ts';
+import type { StructureClassification } from './structureClassificationService.ts';
 
 /**
  * Module C: AI Layout Strategy Service

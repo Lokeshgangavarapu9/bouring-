@@ -1,4 +1,4 @@
-import { GraphMetrics } from './graphAnalysisService.ts';
+import type { GraphMetrics } from './graphAnalysisService.ts';
 
 export type StructureClass =
   | 'ISOLATED_NODE'

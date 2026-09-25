@@ -1,4 +1,4 @@
-import { ConstructedGraph } from './graphConstructionService.ts';
+import type { ConstructedGraph } from './graphConstructionService.ts';
 
 /**
  * Layout Scoring Service

@@ -4,10 +4,10 @@
  * Enforces strict timeouts and zero-dependency classical fallback.
  */
 
-import { LayoutStrategyCandidate, LayoutParameters, LayoutFamily } from './aiLayoutStrategyService.ts';
-import { ConstructedGraph } from './graphConstructionService.ts';
-import { GraphMetrics } from './graphAnalysisService.ts';
-import { GraphSummaryForAI } from './graphPipelineService.ts';
+import type { LayoutStrategyCandidate, LayoutParameters, LayoutFamily } from './aiLayoutStrategyService.ts';
+import type { ConstructedGraph } from './graphConstructionService.ts';
+import type { GraphMetrics } from './graphAnalysisService.ts';
+import type { GraphSummaryForAI } from './graphPipelineService.ts';
 
 function getRemoteAgentUrl(): string {
   return process.env.REMOTE_AGENT_URL || '';

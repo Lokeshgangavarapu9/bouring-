@@ -1,5 +1,5 @@
-import { ConstructedGraph } from './graphConstructionService.ts';
-import { LayoutStrategyCandidate } from './aiLayoutStrategyService.ts';
+import type { ConstructedGraph } from './graphConstructionService.ts';
+import type { LayoutStrategyCandidate } from './aiLayoutStrategyService.ts';
 
 /**
  * Module D: Optimization Service
